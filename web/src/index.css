@@ -1,0 +1,53 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-ink-950 text-slate-200 font-sans antialiased;
+  background-image:
+    radial-gradient(60rem 40rem at 100% -10%, rgba(224, 168, 60, 0.06), transparent),
+    radial-gradient(50rem 40rem at -10% 20%, rgba(52, 211, 153, 0.05), transparent);
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { @apply bg-ink-700 rounded-full; }
+::-webkit-scrollbar-thumb:hover { @apply bg-ink-600; }
+
+@layer components {
+  .card {
+    @apply bg-ink-850/80 border border-ink-700/70 rounded-2xl backdrop-blur-sm;
+  }
+  .stat-num {
+    @apply text-3xl font-bold tracking-tight text-white;
+  }
+  .btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-colors;
+  }
+  .btn-gold {
+    @apply btn bg-gold-500 text-ink-950 hover:bg-gold-400 shadow-glow;
+  }
+  .btn-ghost {
+    @apply btn bg-ink-800 text-slate-200 hover:bg-ink-700 border border-ink-700;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium;
+  }
+  .input {
+    @apply w-full bg-ink-900 border border-ink-700 rounded-xl px-3 py-2 text-sm text-slate-100
+           placeholder:text-slate-500 focus:outline-none focus:border-gold-500/60 focus:ring-1 focus:ring-gold-500/40;
+  }
+}

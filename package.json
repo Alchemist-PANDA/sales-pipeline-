@@ -1,0 +1,15 @@
+{
+  "name": "alchemist-signal-forge",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Autonomous B2B signals-enrichment system for a 30-owner account pool.",
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "setup": "npm install && npm --workspace server run seed",
+    "seed": "npm --workspace server run seed",
+    "dev:server": "npm --workspace server run dev",
+    "dev:web": "npm --workspace web run dev",
+    "build": "npm --workspace web run build && npm --workspace server run build",
+    "start": "npm --workspace server run start"
+  }
+}
