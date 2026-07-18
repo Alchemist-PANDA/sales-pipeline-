@@ -1,5 +1,10 @@
 import type Database from 'better-sqlite3';
 
+function addColumnIfMissing(db: Database.Database, table: string, column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!columns.some((item) => item.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
 export function migrateSignalFirst(db: Database.Database) {
   db.exec(`
     CREATE TABLE IF NOT EXISTS strategies (
@@ -9,6 +14,22 @@ export function migrateSignalFirst(db: Database.Database) {
       status TEXT NOT NULL DEFAULT 'draft',
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS system_state (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS room_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      triggered_by TEXT,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at TEXT,
+      summary_json TEXT
     );
 
     CREATE TABLE IF NOT EXISTS crawl_runs (
@@ -130,10 +151,38 @@ export function migrateSignalFirst(db: Database.Database) {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
+    CREATE TABLE IF NOT EXISTS room_source_connections (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      room TEXT NOT NULL,
+      source_id TEXT NOT NULL,
+      owner_id INTEGER REFERENCES owners(id) ON DELETE CASCADE,
+      access_model TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'disconnected',
+      consent_confirmed INTEGER NOT NULL DEFAULT 0,
+      quota_limit INTEGER,
+      quota_used INTEGER NOT NULL DEFAULT 0,
+      cooldown_until TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(room, source_id, owner_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_signal_events_strategy_status ON signal_events(strategy_id, status);
+    CREATE INDEX IF NOT EXISTS idx_signal_events_room_status ON signal_events(room_origin, status);
     CREATE INDEX IF NOT EXISTS idx_signal_events_company ON signal_events(canonical_company_id);
     CREATE INDEX IF NOT EXISTS idx_opportunities_priority ON lead_opportunities(priority_score DESC);
     CREATE INDEX IF NOT EXISTS idx_people_company ON people(company_id);
     CREATE INDEX IF NOT EXISTS idx_usage_run_provider ON provider_usage(crawl_run_id, provider_id);
+    CREATE INDEX IF NOT EXISTS idx_room_connections ON room_source_connections(room, source_id, status);
   `);
+
+  addColumnIfMissing(db, 'signal_events', 'room_origin', `TEXT NOT NULL DEFAULT 'signal_room'`);
+  addColumnIfMissing(db, 'signal_events', 'source_links_json', `TEXT NOT NULL DEFAULT '[]'`);
+  addColumnIfMissing(db, 'signal_events', 'signal_hypotheses_json', `TEXT NOT NULL DEFAULT '[]'`);
+  addColumnIfMissing(db, 'signal_events', 'rationale', 'TEXT');
+  addColumnIfMissing(db, 'signal_events', 'sme_fit', `TEXT NOT NULL DEFAULT 'unknown'`);
+  addColumnIfMissing(db, 'signal_events', 'selected_at', 'TEXT');
+  addColumnIfMissing(db, 'signal_events', 'selected_by', 'TEXT');
+
+  db.prepare(`INSERT OR IGNORE INTO system_state (key,value) VALUES ('active_room','idle')`).run();
 }
