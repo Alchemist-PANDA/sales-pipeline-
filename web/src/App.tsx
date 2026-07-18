@@ -1,14 +1,16 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
-import { LayoutDashboard, Users, Plug, Target, Radar, FlaskConical, Zap } from 'lucide-react';
+import { LayoutDashboard, Users, Plug, Target, Radar, FlaskConical, Zap, Radio } from 'lucide-react';
 import Overview from './pages/Overview';
 import Leads from './pages/Leads';
 import Integrations from './pages/Integrations';
 import Team from './pages/Team';
 import Signals from './pages/Signals';
 import Connect from './pages/Connect';
+import Rooms from './pages/Rooms';
 
 const NAV = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/rooms', label: 'Signal Rooms', icon: Radio },
   { to: '/leads', label: 'Signal Leads', icon: Target },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/team', label: 'Team & Pool', icon: Users },
@@ -72,6 +74,7 @@ export default function App() {
           <Shell>
             <Routes>
               <Route path="/" element={<Overview />} />
+              <Route path="/rooms" element={<Rooms />} />
               <Route path="/leads" element={<Leads />} />
               <Route path="/integrations" element={<Integrations />} />
               <Route path="/team" element={<Team />} />

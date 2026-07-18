@@ -9,17 +9,21 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { migrate } from './db/index.js';
 import { api } from './routes/api.js';
+import { roomsRouter } from './routes/rooms.js';
+import { migrateRooms } from './db/schema-rooms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4000);
 
 migrate();
+migrateRooms();
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'signal-forge' }));
 app.use('/api', api);
+app.use('/api', roomsRouter);
 
 // Serve built dashboard if present (production single-artifact deploy).
 const webDist = path.join(__dirname, '../../web/dist');
