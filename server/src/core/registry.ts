@@ -133,7 +133,6 @@ export const PLATFORMS: Platform[] = [
     defaultQuota: 10000,
     costWeight: 3,
     waterfallRank: 3,
-    signalPriority: 3,
   },
   {
     id: 'lusha',
