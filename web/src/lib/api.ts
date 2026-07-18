@@ -28,6 +28,8 @@ export interface Platform {
   docs?: string;
   notes?: string;
   capacity: { live: number; reserved: number; total: number };
+  scraper?: boolean;
+  sessionCapture?: boolean;
 }
 
 export interface Lead {

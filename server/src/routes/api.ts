@@ -10,6 +10,8 @@ import { SIGNALS } from '../core/signals.js';
 import { AccountPool } from '../core/pool.js';
 import { EnrichmentEngine } from '../services/enrich.js';
 import { CredentialService } from '../services/credentials.js';
+import { hasScraperSupport } from '../scrapers/platforms/index.js';
+import { supportsSessionCapture } from '../scrapers/sessionCapture.js';
 
 export const api = Router();
 const pool = new AccountPool(db);
@@ -22,7 +24,12 @@ const all = <T>(sql: string, ...p: any[]) => db.prepare(sql).all(...p) as T[];
 // ── Registry & catalog ─────────────────────────────────────────────────────
 api.get('/registry', (_req, res) => {
   res.json({
-    platforms: PLATFORMS.map((p) => ({ ...p, capacity: pool.capacity(p.id) })),
+    platforms: PLATFORMS.map((p) => ({
+      ...p,
+      capacity: pool.capacity(p.id),
+      scraper: hasScraperSupport(p.id),
+      sessionCapture: supportsSessionCapture(p.id),
+    })),
     byCategory: Object.fromEntries(
       Object.entries(platformsByCategory()).map(([k, v]) => [k, v.map((p) => p.id)]),
     ),
@@ -117,6 +124,26 @@ api.get('/credentials/invite/:token', (req, res) => {
 api.post('/credentials/gateway', (req, res) => {
   const { ownerId, gatewayPlatformId, token } = req.body;
   res.json(creds.gatewayAutoconnect({ ownerId, gatewayPlatformId, token }));
+});
+
+// Table 1 — one box for every API key; system distributes + rotates.
+api.post('/credentials/master', (req, res) => {
+  const { raw } = req.body;
+  if (typeof raw !== 'string' || !raw.trim()) return res.status(400).json({ error: 'raw required' });
+  res.json(creds.masterConnect(raw));
+});
+
+// Table 2 — one click enables all scraping (public instant, login via capture).
+api.post('/credentials/scraping/one-click', (_req, res) => {
+  res.json(creds.oneClickScraping());
+});
+
+// Table 2 — automated login → cookie harvest (no manual cookie hunting).
+api.post('/credentials/scraping/capture', async (req, res) => {
+  const { ownerId, platformId, email, password } = req.body;
+  if (!ownerId || !platformId || !email || !password)
+    return res.status(400).json({ error: 'ownerId, platformId, email, password required' });
+  res.json(await creds.captureSessionFor({ ownerId, platformId, email, password }));
 });
 
 // ── Leads ──────────────────────────────────────────────────────────────────
