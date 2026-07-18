@@ -5,7 +5,7 @@
 
 import { Router } from 'express';
 import { db } from '../db/index.js';
-import { PLATFORMS, platformsByCategory, PLATFORMS_BY_ID } from '../core/registry.js';
+import { PLATFORMS, platformsByCategory, PLATFORMS_BY_ID, SIGNAL_PRIORITY_ORDER } from '../core/registry.js';
 import { SIGNALS } from '../core/signals.js';
 import { AccountPool } from '../core/pool.js';
 import { EnrichmentEngine } from '../services/enrich.js';
@@ -33,6 +33,7 @@ api.get('/registry', (_req, res) => {
     byCategory: Object.fromEntries(
       Object.entries(platformsByCategory()).map(([k, v]) => [k, v.map((p) => p.id)]),
     ),
+    signalPriorityOrder: SIGNAL_PRIORITY_ORDER.map((p) => p.id),
   });
 });
 api.get('/signals', (_req, res) => res.json({ signals: SIGNALS }));
