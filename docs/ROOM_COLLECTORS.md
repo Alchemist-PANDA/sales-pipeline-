@@ -92,14 +92,12 @@ Example:
     "discord_bot": {
       "maxResults": 50,
       "discord": {
-        "botToken": "authorized-bot-token",
         "channelIds": ["channel-id"]
       }
     },
     "slack_app": {
       "maxResults": 100,
       "slack": {
-        "botToken": "authorized-bot-token",
         "channelIds": ["channel-id"]
       }
     }
@@ -107,7 +105,7 @@ Example:
 }
 ```
 
-Tokens passed in the run request are used in memory and are not written by the collector service. Production deployment should use a secrets manager and inject short-lived references instead of accepting raw tokens from the browser.
+Discord and Slack tokens should be supplied through the server environment (`DISCORD_BOT_TOKEN` and `SLACK_BOT_TOKEN`) or a production secrets manager. Although the backend supports in-memory request configuration for controlled testing, the browser must not be used to store or distribute credentials.
 
 ## Output
 
