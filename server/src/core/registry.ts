@@ -89,6 +89,8 @@ export interface Platform {
   costWeight?: number;
   /** Ordering hint inside a waterfall (lower = tried first). */
   waterfallRank?: number;
+  /** Signal generation priority (1 = highest). Drives Room 1 crawl order. */
+  signalPriority?: number;
   notes?: string;
 }
 
@@ -109,6 +111,7 @@ export const PLATFORMS: Platform[] = [
     fields: [],
     defaultQuota: 999999,
     costWeight: 0,
+    signalPriority: 5,
     notes:
       'Self-hosted Crawlee + Playwright with stealth. Replaces paid Apify — ' +
       '$0 cost. Handles YC, LinkedIn, Glassdoor, Capterra, Clutch, ThomasNet, ' +
@@ -130,6 +133,7 @@ export const PLATFORMS: Platform[] = [
     defaultQuota: 10000,
     costWeight: 3,
     waterfallRank: 3,
+    signalPriority: 3,
   },
   {
     id: 'lusha',
@@ -298,6 +302,7 @@ export const PLATFORMS: Platform[] = [
     docs: 'https://api.producthunt.com/v2/docs',
     defaultQuota: 10000,
     costWeight: 1,
+    signalPriority: 14,
   },
   {
     id: 'wellfound',
@@ -309,6 +314,7 @@ export const PLATFORMS: Platform[] = [
     fields: [{ key: 'sessionCookie', label: 'Session Cookie', secret: true }],
     defaultQuota: 2000,
     costWeight: 2,
+    signalPriority: 13,
     notes: 'Scraped via self-hosted Crawlee engine with stealth browser.',
   },
   {
@@ -332,6 +338,7 @@ export const PLATFORMS: Platform[] = [
     fields: [],
     defaultQuota: 50000,
     costWeight: 0,
+    signalPriority: 2,
     notes: 'Public directory scraped via self-hosted Crawlee (batch, isHiring).',
   },
   {
@@ -344,6 +351,7 @@ export const PLATFORMS: Platform[] = [
     fields: KEY('Partner API Key'),
     defaultQuota: 3000,
     costWeight: 3,
+    signalPriority: 10,
   },
   {
     id: 'capterra',
@@ -403,6 +411,7 @@ export const PLATFORMS: Platform[] = [
     testHint: 'GET /v21/api.json',
     defaultQuota: 5000,
     costWeight: 1,
+    signalPriority: 7,
   },
 
   // ── Local signals ────────────────────────────────────────────────────────
@@ -416,6 +425,7 @@ export const PLATFORMS: Platform[] = [
     fields: [{ key: 'refreshToken', label: 'OAuth Refresh Token', secret: true }],
     defaultQuota: 20000,
     costWeight: 0,
+    signalPriority: 15,
   },
   {
     id: 'yelp',
@@ -478,6 +488,7 @@ export const PLATFORMS: Platform[] = [
     docs: 'https://www.clay.com/university',
     defaultQuota: 25000,
     costWeight: 3,
+    signalPriority: 6,
     notes: 'Orchestrates waterfall + Claygent research; we push scored leads out.',
   },
   {
@@ -490,6 +501,7 @@ export const PLATFORMS: Platform[] = [
     fields: [{ key: 'liAt', label: 'li_at Cookie', secret: true }],
     defaultQuota: 1500,
     costWeight: 4,
+    signalPriority: 1,
     notes: 'Hiring + leadership-change signals; rotate across the 30-account pool.',
   },
   {
@@ -502,6 +514,7 @@ export const PLATFORMS: Platform[] = [
     fields: KEY(),
     defaultQuota: 5000,
     costWeight: 3,
+    signalPriority: 4,
   },
   {
     id: 'sec_edgar',
@@ -513,6 +526,7 @@ export const PLATFORMS: Platform[] = [
     fields: [],
     defaultQuota: 100000,
     costWeight: 0,
+    signalPriority: 8,
   },
   {
     id: 'uspto',
@@ -524,6 +538,7 @@ export const PLATFORMS: Platform[] = [
     fields: [],
     defaultQuota: 100000,
     costWeight: 0,
+    signalPriority: 16,
   },
   {
     id: 'glassdoor',
@@ -535,6 +550,7 @@ export const PLATFORMS: Platform[] = [
     fields: [{ key: 'sessionCookie', label: 'Session Cookie', secret: true }],
     defaultQuota: 2000,
     costWeight: 2,
+    signalPriority: 12,
     notes: 'Scraped via self-hosted Crawlee engine with stealth browser.',
   },
   {
@@ -547,6 +563,7 @@ export const PLATFORMS: Platform[] = [
     fields: KEY(),
     defaultQuota: 5000,
     costWeight: 3,
+    signalPriority: 9,
   },
   {
     id: 'rb2b',
@@ -558,6 +575,7 @@ export const PLATFORMS: Platform[] = [
     fields: [{ key: 'apiKey', label: 'Webhook Secret', secret: true }],
     defaultQuota: 20000,
     costWeight: 2,
+    signalPriority: 11,
     notes: 'Website visitor de-anonymization — repeat-visit intent signals.',
   },
 ];
@@ -570,6 +588,11 @@ export const PLATFORMS_BY_ID: Record<string, Platform> = Object.fromEntries(
 export const WATERFALL_ORDER: Platform[] = PLATFORMS.filter(
   (p) => p.enrichment && p.waterfallRank,
 ).sort((a, b) => (a.waterfallRank ?? 99) - (b.waterfallRank ?? 99));
+
+/** Signal-source platforms sorted by signal generation priority (1 = highest). */
+export const SIGNAL_PRIORITY_ORDER: Platform[] = PLATFORMS.filter(
+  (p) => p.signalPriority != null,
+).sort((a, b) => (a.signalPriority ?? 99) - (b.signalPriority ?? 99));
 
 export function platformsByCategory(): Record<string, Platform[]> {
   const out: Record<string, Platform[]> = {};

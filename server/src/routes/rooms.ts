@@ -36,7 +36,7 @@ import { StrategyService } from '../services/strategy.js';
 import { SIGNALS } from '../core/signals.js';
 import { AccountPool } from '../core/pool.js';
 import { getConnector } from '../connectors/index.js';
-import { PLATFORMS } from '../core/registry.js';
+import { PLATFORMS, SIGNAL_PRIORITY_ORDER } from '../core/registry.js';
 
 export const roomsRouter = Router();
 const rooms = new RoomControl(db);
@@ -80,8 +80,8 @@ roomsRouter.post('/rooms/1/run', async (req, res) => {
 
   const platforms = req.body?.platforms as string[] | undefined;
   const targetPlatforms = platforms?.length
-    ? PLATFORMS.filter(p => platforms.includes(p.id))
-    : PLATFORMS.filter(p => p.provides.some(c => c !== 'contact_data'));
+    ? SIGNAL_PRIORITY_ORDER.filter(p => platforms.includes(p.id))
+    : SIGNAL_PRIORITY_ORDER;
 
   const detected: number[] = [];
 
