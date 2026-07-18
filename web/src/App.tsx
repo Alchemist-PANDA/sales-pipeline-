@@ -1,14 +1,16 @@
 import { NavLink, Route, Routes } from 'react-router-dom';
-import { LayoutDashboard, Users, Plug, Target, Radar, FlaskConical, Zap } from 'lucide-react';
+import { LayoutDashboard, Users, Plug, Target, Radar, FlaskConical, Zap, DoorOpen } from 'lucide-react';
 import Overview from './pages/Overview';
 import Leads from './pages/Leads';
 import Integrations from './pages/Integrations';
 import Team from './pages/Team';
 import Signals from './pages/Signals';
 import Connect from './pages/Connect';
+import Rooms from './pages/Rooms';
 
 const NAV = [
   { to: '/', label: 'Overview', icon: LayoutDashboard, end: true },
+  { to: '/rooms', label: 'Room Control', icon: DoorOpen },
   { to: '/leads', label: 'Signal Leads', icon: Target },
   { to: '/integrations', label: 'Integrations', icon: Plug },
   { to: '/team', label: 'Team & Pool', icon: Users },
@@ -48,10 +50,10 @@ function Shell({ children }: { children: React.ReactNode }) {
         <div className="mt-auto p-4">
           <div className="card p-4 bg-gradient-to-br from-gold-500/10 to-transparent border-gold-500/20">
             <div className="flex items-center gap-2 text-gold-300 text-xs font-semibold">
-              <Zap className="w-3.5 h-3.5" /> 30-OWNER POOL
+              <Zap className="w-3.5 h-3.5" /> 30-PARTNER SYSTEM
             </div>
             <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
-              15 live · 15 reserved. Every call auto-rotates across the pool for 30× throughput.
+              Partner-owned accounts require consent and platform permission. One room operates at a time.
             </p>
           </div>
         </div>
@@ -72,6 +74,7 @@ export default function App() {
           <Shell>
             <Routes>
               <Route path="/" element={<Overview />} />
+              <Route path="/rooms" element={<Rooms />} />
               <Route path="/leads" element={<Leads />} />
               <Route path="/integrations" element={<Integrations />} />
               <Route path="/team" element={<Team />} />
