@@ -8,6 +8,7 @@ import Database from 'better-sqlite3';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { migrateSignalFirst } from './signalFirstSchema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../.data');
@@ -22,11 +23,11 @@ CREATE TABLE IF NOT EXISTS owners (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   name         TEXT NOT NULL,
   email        TEXT NOT NULL,
-  role         TEXT NOT NULL DEFAULT 'operator',   -- admin | operator
-  status       TEXT NOT NULL DEFAULT 'active',      -- active | reserved
-  share_pct    REAL NOT NULL DEFAULT 0,             -- revenue/lead share
-  invite_token TEXT,                                -- magic-link self-onboarding
-  invite_state TEXT NOT NULL DEFAULT 'pending',     -- pending | connected
+  role         TEXT NOT NULL DEFAULT 'operator',
+  status       TEXT NOT NULL DEFAULT 'active',
+  share_pct    REAL NOT NULL DEFAULT 0,
+  invite_token TEXT,
+  invite_state TEXT NOT NULL DEFAULT 'pending',
   created_at   TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -36,8 +37,8 @@ CREATE TABLE IF NOT EXISTS accounts (
   platform_id    TEXT NOT NULL,
   label          TEXT NOT NULL,
   auth_type      TEXT NOT NULL,
-  secret_sealed  TEXT,                              -- AES-256-GCM blob or NULL
-  status         TEXT NOT NULL DEFAULT 'disconnected', -- connected|error|disconnected
+  secret_sealed  TEXT,
+  status         TEXT NOT NULL DEFAULT 'disconnected',
   quota_limit    INTEGER NOT NULL DEFAULT 5000,
   quota_used     INTEGER NOT NULL DEFAULT 0,
   quota_reset_at TEXT NOT NULL DEFAULT (datetime('now','+30 days')),
@@ -56,17 +57,17 @@ CREATE TABLE IF NOT EXISTS leads (
   contact_name   TEXT,
   title          TEXT,
   email          TEXT,
-  email_status   TEXT,                              -- verified|risky|unknown
+  email_status   TEXT,
   phone          TEXT,
   linkedin       TEXT,
   industry       TEXT,
   employee_count INTEGER,
   location       TEXT,
-  product        TEXT NOT NULL DEFAULT 'BOTH',       -- GEO | AR | BOTH
+  product        TEXT NOT NULL DEFAULT 'BOTH',
   fit_score      INTEGER NOT NULL DEFAULT 0,
-  status         TEXT NOT NULL DEFAULT 'new',         -- new|enriched|qualified|routed|rejected
+  status         TEXT NOT NULL DEFAULT 'new',
   source         TEXT,
-  enrichment     TEXT,                                -- JSON: providers hit, evidence
+  enrichment     TEXT,
   assigned_owner INTEGER REFERENCES owners(id),
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
@@ -109,4 +110,5 @@ CREATE INDEX IF NOT EXISTS idx_accounts_platform ON accounts(platform_id);
 
 export function migrate() {
   db.exec(SCHEMA);
+  migrateSignalFirst(db);
 }

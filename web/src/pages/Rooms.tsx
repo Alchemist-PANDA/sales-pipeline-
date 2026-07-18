@@ -1,407 +1,207 @@
-import { useEffect, useState, useCallback } from 'react';
-import { Radio, Zap, Hand, PenTool, CheckCircle2, XCircle, ArrowRight, Sparkles, ExternalLink, AlertTriangle } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { DoorOpen, PauseCircle, Play, RefreshCw, Upload, CheckSquare } from 'lucide-react';
 import { api } from '../lib/api';
-import { Card, ScoreBadge } from '../components/ui';
 
-interface SignalEvent {
-  id: number;
-  signal_code: string;
-  title: string;
-  company_name: string | null;
-  company_domain: string | null;
-  source_url: string;
-  source_platform: string;
-  evidence: string;
-  strength: number;
-  status: string;
-  room_origin: number;
-  enrichment_data: string | null;
-  created_at: string;
-}
+const ROOMS = [
+  { id: 'signal_room', name: 'Room 1 — Signal Discovery', detail: 'Capture broad, source-linked, SME-relevant business signals.' },
+  { id: 'selection_enrichment_room', name: 'Room 2 — Selection + Enrichment', detail: 'Manually approve signals before enrichment starts.' },
+  { id: 'referrals_room', name: 'Room 3 — Agency Referrals', detail: 'Find agency overflow, white-label and partnership opportunities from free sources.' },
+  { id: 'community_monitoring_room', name: 'Room 4 — Community Monitoring', detail: 'Monitor approved X, Reddit, Discord, Slack, Facebook and Google contexts.' },
+  { id: 'manual_signal_room', name: 'Room 5 — Manual Signal Intake', detail: 'Enter a credible signal and supporting links manually.' },
+];
 
-interface RoomState {
-  activeRoom: number | null;
-  state: string;
-  activatedAt: string | null;
-  activatedBy: string | null;
-  signalStats: { total: number; new: number; reviewed: number; selected: number; enriched: number; rejected: number };
-}
-
-interface Strategy {
-  id: number;
-  name: string;
-  product: string;
-  pains: string[];
-  customer_types: string[];
-  regions: string[];
-  industries: string[];
-  active: boolean;
-}
-
-const ROOM_META = [
-  { id: 1, label: 'Signal Room', desc: 'Crawl platforms, detect signals', icon: Radio, color: 'gold' },
-  { id: 2, label: 'Selection Room', desc: 'Review & enrich selected', icon: Hand, color: 'emerald' },
-  { id: 3, label: 'Manual Signal', desc: 'Enter signal with evidence', icon: PenTool, color: 'sky' },
-] as const;
+const LIVE_COLLECTORS = new Set([
+  'google_search', 'clutch_basic', 'goodfirms_basic', 'g2_basic',
+  'google_community_research', 'reddit_api', 'praw', 'discord_bot', 'slack_app',
+]);
 
 export default function Rooms() {
-  const [roomState, setRoomState] = useState<RoomState | null>(null);
-  const [signals, setSignals] = useState<SignalEvent[]>([]);
-  const [strategies_, setStrategies] = useState<Strategy[]>([]);
+  const [state, setState] = useState<any>(null);
+  const [sources, setSources] = useState<any[]>([]);
+  const [selectedSources, setSelectedSources] = useState<string[]>([]);
+  const [strategyId, setStrategyId] = useState('');
+  const [sourceConfigs, setSourceConfigs] = useState('{}');
+  const [importSource, setImportSource] = useState('');
+  const [importItems, setImportItems] = useState('[\n  {"title":"Example signal","text":"Need an automation partner","url":"https://example.com/source"}\n]');
+  const [lastRun, setLastRun] = useState<any>(null);
   const [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [error, setError] = useState('');
 
-  const loadState = useCallback(() => {
-    api.get('/rooms/state').then(setRoomState);
-    api.get('/strategies').then((r) => setStrategies(r.strategies));
-  }, []);
-
-  const loadSignals = useCallback(() => {
-    if (!roomState) return;
-    const room = roomState.activeRoom;
-    if (room === 1) api.get('/rooms/1/signals').then(r => setSignals(r.signals));
-    else if (room === 2) api.get('/rooms/2/signals').then(r => setSignals(r.signals));
-    else if (room === 3) api.get('/rooms/3/signals').then(r => setSignals(r.signals));
-    else setSignals([]);
-  }, [roomState]);
-
-  useEffect(() => { loadState(); }, [loadState]);
-  useEffect(() => { loadSignals(); }, [roomState?.activeRoom, loadSignals]);
-
-  const activate = async (room: number) => {
-    setBusy(true);
-    await api.post('/rooms/activate', { room });
-    await loadState();
-    setBusy(false);
+  const load = async () => {
+    const next = await api.get('/rooms/state');
+    setState(next);
+    if (next.activeRoom === 'referrals_room' || next.activeRoom === 'community_monitoring_room') {
+      const result = await api.get(`/rooms/sources?room=${next.activeRoom}`);
+      setSources(result.sources || []);
+      setSelectedSources((current) => current.length ? current.filter((id) => result.sources.some((s: any) => s.id === id)) : result.sources.filter((s: any) => LIVE_COLLECTORS.has(s.id)).map((s: any) => s.id));
+      setImportSource((current) => current && result.sources.some((s: any) => s.id === current) ? current : result.sources.find((s: any) => !LIVE_COLLECTORS.has(s.id))?.id || '');
+    } else {
+      setSources([]);
+      setSelectedSources([]);
+    }
   };
 
-  const deactivate = async () => {
-    setBusy(true);
-    await api.post('/rooms/deactivate');
-    setSignals([]);
-    await loadState();
-    setBusy(false);
+  useEffect(() => { load().catch((e) => setError(e.message)); }, []);
+
+  const activeSignalRoom = state?.activeRoom === 'referrals_room' || state?.activeRoom === 'community_monitoring_room';
+  const importableSources = useMemo(() => sources.filter((s) => !LIVE_COLLECTORS.has(s.id)), [sources]);
+
+  const activate = async (room: string) => {
+    setBusy(true); setError(''); setLastRun(null);
+    try { await api.post('/rooms/activate', { room, actor: 'admin' }); await load(); }
+    catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
   };
 
-  const runCrawl = async () => {
-    setBusy(true);
-    await api.post('/rooms/1/run', {});
-    loadSignals();
-    setBusy(false);
+  const idle = async () => {
+    setBusy(true); setError('');
+    try { await api.post('/rooms/idle', { actor: 'admin' }); await load(); }
+    catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
   };
 
-  const reviewSignal = async (id: number) => {
-    await api.post(`/rooms/1/${id}/review`);
-    loadSignals();
+  const trigger = async () => {
+    if (!state?.activeRoom || state.activeRoom === 'idle') return;
+    setBusy(true); setError(''); setLastRun(null);
+    try {
+      let parsedConfigs = {};
+      try { parsedConfigs = JSON.parse(sourceConfigs || '{}'); }
+      catch { throw new Error('Source configuration must be valid JSON.'); }
+      const result = await api.post(`/rooms/${state.activeRoom}/run`, {
+        actor: 'admin', strategyId, sourceIds: selectedSources, sourceConfigs: parsedConfigs,
+      });
+      setLastRun(result);
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
   };
 
-  const rejectSignal = async (id: number) => {
-    await api.post(`/rooms/1/${id}/reject`);
-    loadSignals();
+  const importEvidence = async () => {
+    if (!importSource) return;
+    setBusy(true); setError('');
+    try {
+      const items = JSON.parse(importItems);
+      if (!Array.isArray(items)) throw new Error('Import JSON must be an array.');
+      const result = await api.post(`/rooms/imports/${importSource}`, { room: state.activeRoom, strategyId, items });
+      setLastRun(result);
+    } catch (e: any) { setError(e.message); }
+    finally { setBusy(false); }
   };
 
-  const selectForEnrichment = async () => {
-    if (!selected.size) return;
-    setBusy(true);
-    await api.post('/rooms/2/select', { ids: [...selected] });
-    setSelected(new Set());
-    loadSignals();
-    setBusy(false);
-  };
-
-  const enrichSelected = async () => {
-    setBusy(true);
-    await api.post('/rooms/2/enrich');
-    loadSignals();
-    setBusy(false);
-  };
-
-  const activeRoom = roomState?.activeRoom;
-  const stats = roomState?.signalStats;
+  const toggleSource = (id: string) => setSelectedSources((current) => current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
 
   return (
     <div className="p-8 space-y-6">
-      <header>
-        <h1 className="text-2xl font-bold text-white">Signal Rooms</h1>
-        <p className="text-slate-400 text-sm mt-1">Signal-first pipeline. One room active at a time.</p>
+      <header className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white">Room Control</h1>
+          <p className="text-sm text-slate-400 mt-1">Exactly one manually triggered room may operate at a time.</p>
+        </div>
+        <div className="flex gap-2">
+          <button className="btn-secondary" onClick={() => load()} disabled={busy}><RefreshCw className="w-4 h-4" /> Refresh</button>
+          <button className="btn-secondary" onClick={idle} disabled={busy}><PauseCircle className="w-4 h-4" /> Silence All</button>
+          <button className="btn-gold" onClick={trigger} disabled={busy || state?.activeRoom === 'idle' || (activeSignalRoom && !strategyId)}><Play className="w-4 h-4" /> Trigger Active Room</button>
+        </div>
       </header>
 
-      {/* Stats bar */}
-      {stats && (
-        <div className="flex gap-4 text-xs">
-          <span className="text-slate-400">Total: <span className="text-white font-semibold">{stats.total}</span></span>
-          <span className="text-gold-400">New: {stats.new}</span>
-          <span className="text-sky-400">Reviewed: {stats.reviewed}</span>
-          <span className="text-emerald-400">Selected: {stats.selected}</span>
-          <span className="text-purple-400">Enriched: {stats.enriched}</span>
-          <span className="text-slate-500">Rejected: {stats.rejected}</span>
+      {error && <div className="card p-4 border-red-500/30 text-red-300">{error}</div>}
+
+      <div className="card p-5 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Active room</div>
+          <div className="text-lg font-semibold text-white mt-1">{state?.activeRoom === 'idle' ? 'All rooms silent' : state?.labels?.[state?.activeRoom] || 'Loading…'}</div>
+          {state?.triggeredAt && <div className="text-xs text-slate-400 mt-1">Triggered {new Date(state.triggeredAt).toLocaleString()}</div>}
         </div>
-      )}
+        <span className={`px-3 py-1 rounded-full text-xs ${state?.activeRoom === 'idle' ? 'bg-slate-700 text-slate-300' : 'bg-emerald-500/15 text-emerald-300'}`}>
+          {state?.activeRoom === 'idle' ? 'IDLE' : 'EXCLUSIVE LOCK ACTIVE'}
+        </span>
+      </div>
 
-      {/* Room switcher */}
-      <div className="grid grid-cols-3 gap-4">
-        {ROOM_META.map((rm) => {
-          const isActive = activeRoom === rm.id;
-          const colorClasses = {
-            gold: isActive ? 'border-gold-500 bg-gold-500/10' : 'border-ink-700 hover:border-gold-500/50',
-            emerald: isActive ? 'border-emerald-500 bg-emerald-500/10' : 'border-ink-700 hover:border-emerald-500/50',
-            sky: isActive ? 'border-sky-500 bg-sky-500/10' : 'border-ink-700 hover:border-sky-500/50',
-          }[rm.color];
-
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {ROOMS.map((room) => {
+          const active = state?.activeRoom === room.id;
           return (
-            <button
-              key={rm.id}
-              onClick={() => isActive ? deactivate() : activate(rm.id)}
-              disabled={busy || (!!activeRoom && !isActive)}
-              className={`card p-5 border-2 text-left transition-all ${colorClasses} ${!!activeRoom && !isActive ? 'opacity-40 cursor-not-allowed' : ''}`}
-            >
-              <div className="flex items-center gap-3">
-                <rm.icon className={`w-5 h-5 ${isActive ? (rm.color === 'gold' ? 'text-gold-400' : rm.color === 'emerald' ? 'text-emerald-400' : 'text-sky-400') : 'text-slate-500'}`} />
+            <div key={room.id} className={`card p-5 ${active ? 'border-gold-500/50' : ''}`}>
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className={`font-semibold ${isActive ? 'text-white' : 'text-slate-300'}`}>Room {rm.id}: {rm.label}</div>
-                  <div className="text-xs text-slate-500">{rm.desc}</div>
+                  <div className="flex items-center gap-2"><DoorOpen className="w-5 h-5 text-gold-400" /><h2 className="font-semibold text-white">{room.name}</h2></div>
+                  <p className="text-sm text-slate-400 mt-2">{room.detail}</p>
                 </div>
+                {active && <span className="text-xs text-gold-300">ACTIVE</span>}
               </div>
-              {isActive && (
-                <div className="mt-3 text-xs text-slate-400 flex items-center gap-1">
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" /> Active — click to deactivate
-                </div>
-              )}
-            </button>
+              <button className={active ? 'btn-secondary mt-4' : 'btn-gold mt-4'} onClick={() => activate(room.id)} disabled={busy || active}>
+                {active ? 'Currently active' : 'Activate this room'}
+              </button>
+            </div>
           );
         })}
       </div>
 
-      {/* Active room content */}
-      {activeRoom === 1 && <Room1View signals={signals} strategies={strategies_} busy={busy} onRun={runCrawl} onReview={reviewSignal} onReject={rejectSignal} />}
-      {activeRoom === 2 && <Room2View signals={signals} selected={selected} setSelected={setSelected} busy={busy} onSelect={selectForEnrichment} onEnrich={enrichSelected} />}
-      {activeRoom === 3 && <Room3View signals={signals} busy={busy} onRefresh={loadSignals} />}
-      {!activeRoom && <IdleView stats={stats} />}
-    </div>
-  );
-}
-
-function IdleView({ stats }: { stats?: RoomState['signalStats'] | null }) {
-  return (
-    <Card className="text-center py-12">
-      <AlertTriangle className="w-8 h-8 text-gold-400 mx-auto mb-3" />
-      <div className="text-white font-semibold">All rooms idle</div>
-      <p className="text-slate-400 text-sm mt-2">Activate a room above to begin. Only one room operates at a time.</p>
-      {stats && stats.new > 0 && (
-        <p className="text-gold-400 text-sm mt-3">{stats.new} unreviewed signal{stats.new > 1 ? 's' : ''} waiting in the inbox.</p>
-      )}
-    </Card>
-  );
-}
-
-function Room1View({ signals, strategies, busy, onRun, onReview, onReject }: {
-  signals: SignalEvent[];
-  strategies: Strategy[];
-  busy: boolean;
-  onRun: () => void;
-  onReview: (id: number) => void;
-  onReject: (id: number) => void;
-}) {
-  const activeStrategy = strategies.find(s => s.active);
-
-  return (
-    <div className="space-y-4">
-      <Card className="flex items-center justify-between">
-        <div>
-          <div className="text-sm font-semibold text-white">Signal Crawl</div>
-          <div className="text-xs text-slate-400 mt-0.5">
-            Strategy: {activeStrategy ? <span className="text-gold-300">{activeStrategy.name}</span> : <span className="text-rose-400">None — create one first</span>}
+      {activeSignalRoom && (
+        <section className="card p-5 space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Collector Run Configuration</h2>
+            <p className="text-sm text-slate-400">A saved strategy is mandatory. Tokens are used in-memory and are not persisted by this screen.</p>
           </div>
-        </div>
-        <button onClick={onRun} disabled={busy || !activeStrategy} className="btn-gold">
-          <Zap className="w-4 h-4" /> {busy ? 'Crawling…' : 'Run Signal Crawl'}
-        </button>
-      </Card>
+          <label className="block text-sm text-slate-300">Strategy ID
+            <input className="mt-1 w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" value={strategyId} onChange={(e) => setStrategyId(e.target.value)} placeholder="strategy-uuid" />
+          </label>
+          <label className="block text-sm text-slate-300">Optional source configurations (JSON)
+            <textarea className="mt-1 w-full min-h-32 rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 font-mono text-xs" value={sourceConfigs} onChange={(e) => setSourceConfigs(e.target.value)} placeholder='{"reddit_api":{"subreddits":["agency"]},"discord_bot":{"channelIds":["..."]}}' />
+          </label>
+        </section>
+      )}
 
-      <SignalTable signals={signals} actions={(sig) => (
-        <div className="flex gap-1">
-          {sig.status === 'new' && (
-            <>
-              <button onClick={() => onReview(sig.id)} className="p-1.5 rounded-lg hover:bg-ink-700 text-sky-400" title="Mark reviewed">
-                <CheckCircle2 className="w-3.5 h-3.5" />
-              </button>
-              <button onClick={() => onReject(sig.id)} className="p-1.5 rounded-lg hover:bg-ink-700 text-rose-400" title="Reject">
-                <XCircle className="w-3.5 h-3.5" />
-              </button>
-            </>
-          )}
-        </div>
-      )} />
-    </div>
-  );
-}
-
-function Room2View({ signals, selected, setSelected, busy, onSelect, onEnrich }: {
-  signals: SignalEvent[];
-  selected: Set<number>;
-  setSelected: (s: Set<number>) => void;
-  busy: boolean;
-  onSelect: () => void;
-  onEnrich: () => void;
-}) {
-  const toggleSelect = (id: number) => {
-    const next = new Set(selected);
-    next.has(id) ? next.delete(id) : next.add(id);
-    setSelected(next);
-  };
-
-  const selectableSignals = signals.filter(s => s.status === 'new' || s.status === 'reviewed');
-  const selectedSignals = signals.filter(s => s.status === 'selected');
-
-  return (
-    <div className="space-y-4">
-      <Card className="flex items-center justify-between">
-        <div>
-          <div className="text-sm font-semibold text-white">Selection + Enrichment</div>
-          <div className="text-xs text-slate-400 mt-0.5">{selectableSignals.length} awaiting selection · {selectedSignals.length} selected for enrichment</div>
-        </div>
-        <div className="flex gap-2">
-          <button onClick={onSelect} disabled={busy || !selected.size} className="btn-gold text-sm">
-            <ArrowRight className="w-4 h-4" /> Select ({selected.size})
-          </button>
-          <button onClick={onEnrich} disabled={busy || !selectedSignals.length} className="px-4 py-2 rounded-xl text-sm font-semibold bg-emerald-500 text-ink-950 hover:bg-emerald-400 disabled:opacity-50 flex items-center gap-2">
-            <Sparkles className="w-4 h-4" /> Enrich Selected
-          </button>
-        </div>
-      </Card>
-
-      <SignalTable signals={signals} selectable selectableStatuses={['new', 'reviewed']} selected={selected} onToggle={toggleSelect} />
-    </div>
-  );
-}
-
-function Room3View({ signals, busy, onRefresh }: { signals: SignalEvent[]; busy: boolean; onRefresh: () => void }) {
-  const [form, setForm] = useState({ signal_code: '', title: '', company_name: '', company_domain: '', source_url: '', source_platform: '', evidence: '' });
-
-  const submit = async () => {
-    if (!form.source_url || !form.source_platform || !form.evidence || !form.signal_code || !form.title) return;
-    await api.post('/rooms/3/create', form);
-    setForm({ signal_code: '', title: '', company_name: '', company_domain: '', source_url: '', source_platform: '', evidence: '' });
-    onRefresh();
-  };
-
-  const enrichManual = async (id: number) => {
-    await api.post(`/rooms/3/${id}/enrich`);
-    onRefresh();
-  };
-
-  return (
-    <div className="space-y-4">
-      <Card>
-        <div className="text-sm font-semibold text-white mb-3">Submit Manual Signal</div>
-        <div className="grid grid-cols-2 gap-3">
-          <input className="input" placeholder="Signal code (e.g. A15)" value={form.signal_code} onChange={e => setForm({...form, signal_code: e.target.value})} />
-          <input className="input" placeholder="Title" value={form.title} onChange={e => setForm({...form, title: e.target.value})} />
-          <input className="input" placeholder="Company name" value={form.company_name} onChange={e => setForm({...form, company_name: e.target.value})} />
-          <input className="input" placeholder="Company domain" value={form.company_domain} onChange={e => setForm({...form, company_domain: e.target.value})} />
-          <input className="input" placeholder="Source URL *" value={form.source_url} onChange={e => setForm({...form, source_url: e.target.value})} />
-          <input className="input" placeholder="Source platform *" value={form.source_platform} onChange={e => setForm({...form, source_platform: e.target.value})} />
-          <textarea className="input col-span-2 h-20 resize-none" placeholder="Evidence text *" value={form.evidence} onChange={e => setForm({...form, evidence: e.target.value})} />
-        </div>
-        <button onClick={submit} disabled={busy || !form.source_url || !form.evidence || !form.signal_code} className="btn-gold mt-3">
-          <PenTool className="w-4 h-4" /> Submit Signal
-        </button>
-      </Card>
-
-      <SignalTable signals={signals} actions={(sig) => (
-        sig.status !== 'enriched' ? (
-          <button onClick={() => enrichManual(sig.id)} className="px-2 py-1 text-xs rounded-lg bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30">
-            Enrich
-          </button>
-        ) : null
-      )} />
-    </div>
-  );
-}
-
-function SignalTable({ signals, actions, selectable, selectableStatuses, selected, onToggle }: {
-  signals: SignalEvent[];
-  actions?: (sig: SignalEvent) => React.ReactNode;
-  selectable?: boolean;
-  selectableStatuses?: string[];
-  selected?: Set<number>;
-  onToggle?: (id: number) => void;
-}) {
-  if (!signals.length) {
-    return <Card className="text-center py-8 text-slate-500 text-sm">No signals yet.</Card>;
-  }
-
-  const statusColor: Record<string, string> = {
-    new: 'text-gold-400 bg-gold-500/10',
-    reviewed: 'text-sky-400 bg-sky-500/10',
-    selected: 'text-emerald-400 bg-emerald-500/10',
-    enrichment_in_progress: 'text-amber-300 bg-amber-500/10',
-    enriched: 'text-purple-400 bg-purple-500/10',
-    rejected: 'text-slate-500 bg-ink-800',
-  };
-
-  return (
-    <Card className="!p-0 overflow-hidden">
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="text-left text-xs uppercase tracking-wider text-slate-400 border-b border-ink-700">
-              {selectable && <th className="px-3 py-3 w-8"></th>}
-              <th className="px-4 py-3">Signal</th>
-              <th className="px-4 py-3">Company</th>
-              <th className="px-4 py-3">Evidence</th>
-              <th className="px-4 py-3">Source</th>
-              <th className="px-4 py-3">Strength</th>
-              <th className="px-4 py-3">Status</th>
-              {actions && <th className="px-4 py-3"></th>}
-            </tr>
-          </thead>
-          <tbody>
-            {signals.map((sig) => {
-              const canSelect = selectable && selectableStatuses?.includes(sig.status);
+      {sources.length > 0 && (
+        <section className="space-y-3">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Free / Free-tier Sources</h2>
+            <p className="text-sm text-slate-400">Select live collectors for the next run. Manual sources use the evidence import panel.</p>
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            {sources.map((source) => {
+              const live = LIVE_COLLECTORS.has(source.id);
+              const selected = selectedSources.includes(source.id);
               return (
-                <tr key={sig.id} className="border-b border-ink-800/70 hover:bg-ink-850/50 transition-colors">
-                  {selectable && (
-                    <td className="px-3 py-3">
-                      {canSelect && (
-                        <input
-                          type="checkbox"
-                          checked={selected?.has(sig.id) ?? false}
-                          onChange={() => onToggle?.(sig.id)}
-                          className="w-4 h-4 rounded border-ink-600 bg-ink-800 text-gold-500 focus:ring-gold-500/50"
-                        />
-                      )}
-                    </td>
-                  )}
-                  <td className="px-4 py-3">
-                    <span className="pill bg-gold-500/10 text-gold-300 border border-gold-500/30 font-mono text-[10px]">{sig.signal_code}</span>
-                    <div className="text-xs text-slate-300 mt-0.5">{sig.title}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="text-white text-xs font-medium">{sig.company_name ?? '—'}</div>
-                    <div className="text-slate-500 text-[10px]">{sig.company_domain}</div>
-                  </td>
-                  <td className="px-4 py-3 max-w-[220px]">
-                    <div className="text-xs text-slate-300 truncate">{sig.evidence}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <a href={sig.source_url} target="_blank" rel="noopener" className="text-xs text-sky-400 hover:text-sky-300 flex items-center gap-1">
-                      {sig.source_platform} <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </td>
-                  <td className="px-4 py-3"><ScoreBadge score={sig.strength} /></td>
-                  <td className="px-4 py-3">
-                    <span className={`pill text-[10px] font-semibold ${statusColor[sig.status] ?? 'text-slate-400 bg-ink-800'}`}>
-                      {sig.status}
-                    </span>
-                  </td>
-                  {actions && <td className="px-4 py-3">{actions(sig)}</td>}
-                </tr>
+                <div key={source.id} className={`card p-4 ${selected ? 'border-emerald-500/40' : ''}`}>
+                  <div className="flex justify-between gap-3">
+                    <div className="font-medium text-white">{source.name}</div>
+                    <span className="text-xs text-emerald-300 uppercase">{source.cost.replace('_', ' ')}</span>
+                  </div>
+                  <p className="text-sm text-slate-300 mt-2">{source.purpose}</p>
+                  <div className="text-xs text-slate-500 mt-3">{source.accessModel.replaceAll('_', ' ')} · {live ? 'live collector' : 'import/webhook collector'}</div>
+                  <div className="text-xs text-slate-400 mt-1">{source.notes}</div>
+                  {live && <button className="btn-secondary mt-3" onClick={() => toggleSource(source.id)}><CheckSquare className="w-4 h-4" /> {selected ? 'Selected' : 'Select for run'}</button>}
+                </div>
               );
             })}
-          </tbody>
-        </table>
-      </div>
-    </Card>
+          </div>
+        </section>
+      )}
+
+      {activeSignalRoom && importableSources.length > 0 && (
+        <section className="card p-5 space-y-4">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Import Manual / Alert Evidence</h2>
+            <p className="text-sm text-slate-400">For X, Facebook Groups, LinkedIn, Upwork, Google Alerts, F5Bot and n8n. Every item requires a credible source URL.</p>
+          </div>
+          <label className="block text-sm text-slate-300">Source
+            <select className="mt-1 w-full rounded-lg bg-slate-900 border border-slate-700 px-3 py-2" value={importSource} onChange={(e) => setImportSource(e.target.value)}>
+              {importableSources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
+            </select>
+          </label>
+          <label className="block text-sm text-slate-300">Evidence items (JSON array)
+            <textarea className="mt-1 w-full min-h-40 rounded-lg bg-slate-900 border border-slate-700 px-3 py-2 font-mono text-xs" value={importItems} onChange={(e) => setImportItems(e.target.value)} />
+          </label>
+          <button className="btn-gold" disabled={busy || !strategyId || !importSource} onClick={importEvidence}><Upload className="w-4 h-4" /> Import Evidence</button>
+        </section>
+      )}
+
+      {lastRun && (
+        <section className="card p-5">
+          <h2 className="font-semibold text-white">Last operation</h2>
+          <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(lastRun, null, 2)}</pre>
+        </section>
+      )}
+    </div>
   );
 }

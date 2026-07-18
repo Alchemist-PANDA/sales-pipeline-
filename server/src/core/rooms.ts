@@ -1,91 +1,180 @@
 /**
- * Room-control service. Enforces the three-room operating model:
- *   Room 1 — Signal Room: crawl platforms, detect signals, no enrichment.
- *   Room 2 — Selection + Enrichment Room: review & enrich selected signals.
- *   Room 3 — Manual Signal Room: operator enters signal, system collects data.
+ * Five-room manual operating model.
  *
- * Only ONE room is active at a time (backend-enforced). The operator explicitly
- * activates a room; all others are silenced until the active room goes idle.
+ * Exactly one room may be active at a time. All rooms are manually triggered.
+ *
+ * Room 1: Signal Discovery
+ *   - discovers broad, open-world lead-convertible business signals
+ *   - every signal preserves source links for human credibility review
+ *   - job boards are business-signal sources, never job-search destinations
+ *   - enterprise / big-company signals are rejected; target is SMEs only
+ *
+ * Room 2: Selection + Enrichment
+ *   - operator manually selects which discovered signals to enrich
+ *   - enrichment starts only after explicit approval
+ *
+ * Room 3: Agency Referrals
+ *   - finds SME agency partnership, overflow, white-label and referral signals
+ *   - uses only free or genuine free-tier sources configured in freeRoomSources.ts
+ *
+ * Room 4: Community Monitoring
+ *   - monitors approved Facebook, X, Reddit, Discord and Slack contexts for signals
+ *   - access must be authorized and platform rules must be respected
+ *
+ * Room 5: Manual Signal Intake
+ *   - operator manually enters a supported signal with credible source evidence
+ *   - system then collects surrounding company / people / contact data
  */
 
-import type Database from 'better-sqlite3';
+export type RoomMode =
+  | 'signal_room'
+  | 'selection_enrichment_room'
+  | 'referrals_room'
+  | 'community_monitoring_room'
+  | 'manual_signal_room';
 
-export type RoomId = 1 | 2 | 3;
-export type RoomState = 'idle' | 'active';
+export type RoomState = RoomMode | 'idle';
 
-export interface RoomStatus {
-  activeRoom: RoomId | null;
-  state: RoomState;
-  activatedAt: string | null;
-  activatedBy: string | null;
+export const ROOM_LABELS: Record<RoomMode, string> = {
+  signal_room: 'Room 1 — Signal Discovery',
+  selection_enrichment_room: 'Room 2 — Selection + Enrichment',
+  referrals_room: 'Room 3 — Agency Referrals',
+  community_monitoring_room: 'Room 4 — Community Monitoring',
+  manual_signal_room: 'Room 5 — Manual Signal Intake',
+};
+
+export interface RoomPolicy {
+  activeRoom: RoomMode;
+  manualOnly: true;
+  requireSignalLinks: true;
+  rejectEnterpriseTargets: true;
+  jobBoardsForSignalsOnly: true;
+  openWorldSignalDetection: true;
+  purpose: 'sell_agentic_systems_and_saas';
 }
 
-export class RoomControl {
-  constructor(private db: Database.Database) {}
+export interface SignalSourceLink {
+  label: string;
+  url: string;
+  sourceType:
+    | 'official_company'
+    | 'job_board'
+    | 'review_site'
+    | 'news'
+    | 'public_record'
+    | 'directory'
+    | 'social'
+    | 'community'
+    | 'google_result'
+    | 'manual_upload'
+    | 'other';
+  capturedAt?: string;
+}
 
-  private getVal(key: string): string | null {
-    const row = this.db.prepare('SELECT value FROM system_state WHERE key=?').get(key) as { value: string } | undefined;
-    return row?.value ?? null;
-  }
+export interface SignalRoomEvent {
+  id?: number;
+  signalType?: string;
+  signalHypotheses?: string[];
+  sourcePlatform: string;
+  companyNameRaw: string;
+  title: string;
+  snippet?: string;
+  region?: string;
+  rationale?: string;
+  sourceLinks: SignalSourceLink[];
+  fitsStrategy: boolean;
+  smeFit: 'yes' | 'no' | 'unknown';
+  status: 'candidate' | 'reviewed' | 'selected_for_enrichment' | 'rejected' | 'enrichment_in_progress' | 'enriched';
+}
 
-  private setVal(key: string, value: string) {
-    this.db.prepare(
-      `INSERT INTO system_state (key, value, set_at) VALUES (?, ?, datetime('now'))
-       ON CONFLICT(key) DO UPDATE SET value=excluded.value, set_at=excluded.set_at`
-    ).run(key, value);
-  }
+export interface ManualSignalSubmission {
+  signalType?: string;
+  signalHypotheses?: string[];
+  companyNameRaw: string;
+  title: string;
+  description: string;
+  sourceLinks: SignalSourceLink[];
+  submittedBy: string;
+}
 
-  getStatus(): RoomStatus {
-    const room = this.getVal('active_room');
-    return {
-      activeRoom: room ? (Number(room) as RoomId) : null,
-      state: room ? 'active' : 'idle',
-      activatedAt: this.getVal('room_activated_at'),
-      activatedBy: this.getVal('room_activated_by'),
-    };
-  }
+export function defaultRoomPolicy(activeRoom: RoomMode): RoomPolicy {
+  return {
+    activeRoom,
+    manualOnly: true,
+    requireSignalLinks: true,
+    rejectEnterpriseTargets: true,
+    jobBoardsForSignalsOnly: true,
+    openWorldSignalDetection: true,
+    purpose: 'sell_agentic_systems_and_saas',
+  };
+}
 
-  activate(room: RoomId, actor: string = 'operator'): RoomStatus {
-    const current = this.getStatus();
-    if (current.activeRoom && current.activeRoom !== room) {
-      throw new RoomConflictError(current.activeRoom, room);
-    }
-    this.setVal('active_room', String(room));
-    this.setVal('room_activated_at', new Date().toISOString());
-    this.setVal('room_activated_by', actor);
-    this.db.prepare(
-      `INSERT INTO audit_log (actor, action, detail) VALUES (?, 'room_activate', ?)`
-    ).run(actor, `Room ${room} activated`);
-    return this.getStatus();
-  }
-
-  deactivate(actor: string = 'operator'): RoomStatus {
-    const current = this.getStatus();
-    if (current.activeRoom) {
-      this.db.prepare(
-        `INSERT INTO audit_log (actor, action, detail) VALUES (?, 'room_deactivate', ?)`
-      ).run(actor, `Room ${current.activeRoom} deactivated`);
-    }
-    this.db.prepare(`DELETE FROM system_state WHERE key IN ('active_room','room_activated_at','room_activated_by')`).run();
-    return this.getStatus();
-  }
-
-  assertActive(room: RoomId): void {
-    const status = this.getStatus();
-    if (status.activeRoom !== room) {
-      throw new RoomNotActiveError(room, status.activeRoom);
-    }
+export function assertSingleActiveRoom(activeRoom: RoomState, requestedRoom: RoomMode) {
+  if (activeRoom !== requestedRoom) {
+    throw new Error(
+      `Room ${requestedRoom} is silent because ${activeRoom} is currently active. Exactly one room may run at a time.`,
+    );
   }
 }
 
-export class RoomConflictError extends Error {
-  constructor(public currentRoom: RoomId, public requestedRoom: RoomId) {
-    super(`Room ${currentRoom} is currently active. Deactivate it before activating Room ${requestedRoom}.`);
+export function assertSupportedSignalLinks(links: SignalSourceLink[]) {
+  if (!Array.isArray(links) || !links.length) throw new Error('Each signal must include at least one source link.');
+  for (const link of links) {
+    if (!link?.label?.trim()) throw new Error('Every signal source link needs a label.');
+    if (!/^https?:\/\//i.test(link.url)) throw new Error(`Invalid signal source URL: ${link.url}`);
   }
 }
 
-export class RoomNotActiveError extends Error {
-  constructor(public requiredRoom: RoomId, public activeRoom: RoomId | null) {
-    super(`Room ${requiredRoom} is not active (current: ${activeRoom ?? 'idle'}). Activate it first.`);
+export function assertJobBoardSignalOnly(context: { sourcePlatform: string; title: string; snippet?: string }) {
+  const platform = context.sourcePlatform.toLowerCase();
+  if (!['indeed', 'linkedin', 'wellfound', 'glassdoor', 'ycombinator', 'upwork', 'job_board'].some((x) => platform.includes(x))) {
+    return;
+  }
+  const text = `${context.title} ${context.snippet ?? ''}`.toLowerCase();
+  const jobSeekingIntent = ['help me apply', 'write my cv', 'resume for this job', 'job seeker workflow', 'submit application'];
+  if (jobSeekingIntent.some((x) => text.includes(x))) {
+    throw new Error('Job-board data must be used only as a business signal, not as a job-search workflow.');
+  }
+}
+
+export function inferSmeFit(params: {
+  employeeCount?: number | null;
+  revenueUsd?: number | null;
+  strategyMinEmployees?: number | null;
+  strategyMaxEmployees?: number | null;
+  strategyMinRevenueUsd?: number | null;
+  strategyMaxRevenueUsd?: number | null;
+}): 'yes' | 'no' | 'unknown' {
+  const employeeKnown = typeof params.employeeCount === 'number';
+  const revenueKnown = typeof params.revenueUsd === 'number';
+  const employeeOk = !employeeKnown
+    ? null
+    : (params.strategyMinEmployees == null || params.employeeCount! >= params.strategyMinEmployees) &&
+      (params.strategyMaxEmployees == null || params.employeeCount! <= params.strategyMaxEmployees);
+  const revenueOk = !revenueKnown
+    ? null
+    : (params.strategyMinRevenueUsd == null || params.revenueUsd! >= params.strategyMinRevenueUsd) &&
+      (params.strategyMaxRevenueUsd == null || params.revenueUsd! <= params.strategyMaxRevenueUsd);
+  if (employeeOk === false || revenueOk === false) return 'no';
+  if (employeeOk === true || revenueOk === true) return 'yes';
+  return 'unknown';
+}
+
+export function rejectEnterpriseTarget(params: {
+  companyName: string;
+  employeeCount?: number | null;
+  maxEmployees?: number | null;
+  enterpriseKeywords?: string[];
+}) {
+  const enterpriseWords = params.enterpriseKeywords ?? [
+    'fortune 500', 'fortune 1000', 'multinational conglomerate', 'global bank', 'global insurance group',
+  ];
+  const lower = params.companyName.toLowerCase();
+  if (enterpriseWords.some((x) => lower.includes(x))) {
+    throw new Error('Enterprise targets are out of scope. The system is restricted to SMEs.');
+  }
+  const maximum = params.maxEmployees ?? 500;
+  if (typeof params.employeeCount === 'number' && params.employeeCount > maximum) {
+    throw new Error(`Company exceeds the configured SME maximum of ${maximum} employees.`);
   }
 }
