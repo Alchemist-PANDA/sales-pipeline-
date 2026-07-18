@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { migrateSignalFirst } from './signalFirstSchema.js';
+import { migrateCrawl } from '../crawl/schema.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, '../../.data');
@@ -111,4 +112,5 @@ CREATE INDEX IF NOT EXISTS idx_accounts_platform ON accounts(platform_id);
 export function migrate() {
   db.exec(SCHEMA);
   migrateSignalFirst(db);
+  migrateCrawl(db);
 }

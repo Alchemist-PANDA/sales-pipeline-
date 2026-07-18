@@ -4,13 +4,23 @@
  * session pool to spread load and avoid bans.
  *
  * Each platform declares a ScrapeTask — URL template + extraction logic.
- * The engine handles launching, stealth, retries, and rate limiting.
+ *
+ * PRODUCTION PATH: `runScrape` now routes through the production crawl subsystem
+ * (crawl/) which adds canonical URL normalization, response caching, duplicate-
+ * page detection, anti-bot handling, retry/backoff, and metrics around the
+ * browser render — while still invoking each platform's own `extract` callback
+ * so bespoke per-site parsing keeps working unchanged. The raw Crawlee path
+ * remains available via `runScrapeRaw` for callers that need the crawler
+ * framework directly.
  */
 
 import { PlaywrightCrawler, Dataset, Configuration } from 'crawlee';
 import { chromium } from 'playwright-core';
 import fs from 'node:fs';
 import { throttled } from './rateLimiter.js';
+import { db } from '../db/index.js';
+import { getCrawler } from '../crawl/crawler.js';
+import { normalizeUrl } from '../crawl/urlNormalizer.js';
 
 export interface ScrapeTask {
   platformId: string;
@@ -57,10 +67,57 @@ const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.91 Safari/537.36';
 
 /**
- * Run a single scrape task through the Crawlee engine with stealth, rate
- * limiting, and automatic retries. Returns extracted evidence strings.
+ * Run a single scrape task through the production pipeline: canonical-URL cache
+ * lookup first (a fresh hit skips the browser entirely), otherwise a rate-limited
+ * stealth browser render + the platform's own `extract`, with the result cached
+ * and every outcome recorded to crawl metrics. Falls back to the raw Crawlee path
+ * for the actual render.
  */
 export async function runScrape(task: ScrapeTask): Promise<ScrapeResult> {
+  const crawler = getCrawler(db);
+  const norm = normalizeUrl(task.url);
+
+  // Fresh cache hit → replay the stored ScrapeResult, no browser needed.
+  if (norm) {
+    const cached = crawler.cache.get(norm.canonical);
+    if (cached?.fresh && cached.body) {
+      try {
+        const replay = JSON.parse(cached.body) as ScrapeResult;
+        crawler.metrics.record(task.platformId, 'cache_hit');
+        return replay;
+      } catch {
+        /* corrupt cache entry — fall through to a fresh render */
+      }
+    }
+  }
+
+  const started = Date.now();
+  const result = await runScrapeRaw(task);
+
+  if (result.rateLimited) {
+    crawler.metrics.record(task.platformId, 'fetch_fail', Date.now() - started);
+  } else {
+    crawler.metrics.record(task.platformId, 'fetch_ok', Date.now() - started);
+    if (norm) {
+      // Cache the serialized result (dedup + TTL handled by the cache layer).
+      const { duplicate } = crawler.cache.put({
+        canonicalUrl: norm.canonical,
+        platformId: task.platformId,
+        statusCode: 200,
+        body: JSON.stringify(result),
+      });
+      if (duplicate) crawler.metrics.record(task.platformId, 'dup_page');
+    }
+  }
+  return result;
+}
+
+/**
+ * Raw Crawlee render — stealth browser, rate limiting, framework-level retries.
+ * Invokes the platform's `extract(page)` against a live page. Used internally by
+ * `runScrape` and available directly for callers that need the crawler framework.
+ */
+export async function runScrapeRaw(task: ScrapeTask): Promise<ScrapeResult> {
   return throttled(task.platformId, async () => {
     const executablePath = resolveChromium();
     let result: ScrapeResult = { evidence: [] };
