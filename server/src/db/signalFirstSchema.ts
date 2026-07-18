@@ -168,7 +168,6 @@ export function migrateSignalFirst(db: Database.Database) {
     );
 
     CREATE INDEX IF NOT EXISTS idx_signal_events_strategy_status ON signal_events(strategy_id, status);
-    CREATE INDEX IF NOT EXISTS idx_signal_events_room_status ON signal_events(room_origin, status);
     CREATE INDEX IF NOT EXISTS idx_signal_events_company ON signal_events(canonical_company_id);
     CREATE INDEX IF NOT EXISTS idx_opportunities_priority ON lead_opportunities(priority_score DESC);
     CREATE INDEX IF NOT EXISTS idx_people_company ON people(company_id);
@@ -184,5 +183,6 @@ export function migrateSignalFirst(db: Database.Database) {
   addColumnIfMissing(db, 'signal_events', 'selected_at', 'TEXT');
   addColumnIfMissing(db, 'signal_events', 'selected_by', 'TEXT');
 
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_signal_events_room_status ON signal_events(room_origin, status)`);
   db.prepare(`INSERT OR IGNORE INTO system_state (key,value) VALUES ('active_room','idle')`).run();
 }
