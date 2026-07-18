@@ -59,13 +59,32 @@ orchestrator waterfalls to the next provider — callers never see the failover.
 
 `persist()` writes fields + signals back and flips the lead to `qualified` at 60+.
 
+## Self-hosted scraping (Crawlee engine)
+
+Non-API platforms (LinkedIn, Glassdoor, YC, Wellfound, Capterra, TrustRadius,
+Clutch, ThomasNet, Manta, Google Business) are scraped via a **self-hosted
+Crawlee + Playwright** engine — $0 cost, no Apify subscription needed.
+
+- `scrapers/engine.ts` — Crawlee PlaywrightCrawler with stealth args, session
+  pool, fingerprint rotation, and automatic retries.
+- `scrapers/rateLimiter.ts` — per-platform jittered delays + concurrency caps
+  (LinkedIn 4s, Glassdoor 3s, etc.) to avoid IP bans.
+- `scrapers/platforms/*.ts` — platform-specific extraction logic (URL templates
+  + page selectors).
+- `connectors/scraper.ts` — `ScraperConnector` that plugs into the same
+  connector framework as API platforms. Decrypts session cookies from the vault
+  and injects them into the browser context for authenticated scraping.
+
+The engine rotates across the 30-owner cookie pool just like API connectors —
+each scrape runs in an isolated browser context with one owner's session.
+
 ## Demo vs live
 
 Connectors run in **demo mode** by default: deterministic synthetic responses
 seeded off the company name, worded to match the signal rules — so the whole
-pipeline is demonstrable with zero API keys. Setting `LIVE_MODE=true` and
-implementing the real API/MCP calls inside each connector switches to production
-without touching the pool, scoring, or UI.
+pipeline is demonstrable with zero API keys. Setting `LIVE_MODE=true` switches
+scraper-backed platforms to real Crawlee extraction and API-backed platforms
+to real HTTP calls — without touching the pool, scoring, or UI.
 
 ## Security
 

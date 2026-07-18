@@ -98,23 +98,21 @@ const KEY = (label = 'API Key'): CredentialField[] => [
 ];
 
 export const PLATFORMS: Platform[] = [
-  // ── Gateways (adopt these first — zero-touch fan-out) ─────────────────────
+  // ── Self-Hosted Scraping Engine (Crawlee — free, stealth, TypeScript) ─────
   {
-    id: 'apify',
-    name: 'Apify',
-    category: 'Gateway / Scraping',
-    authType: 'mcp_gateway',
-    onboarding: 'gateway_autoconnect',
+    id: 'crawlee_engine',
+    name: 'Crawlee (Self-Hosted)',
+    category: 'Scraping Engine',
+    authType: 'public',
+    onboarding: 'none',
     provides: ['yc', 'local', 'event', 'launch', 'public_content'],
-    fields: [{ key: 'token', label: 'Apify Token', secret: true, optional: true }],
-    gateway: { kind: 'mcp', name: 'Apify MCP', url: 'https://mcp.apify.com' },
-    testHint: 'GET /v2/users/me',
-    docs: 'https://docs.apify.com/platform/integrations/mcp',
-    defaultQuota: 100000,
-    costWeight: 2,
+    fields: [],
+    defaultQuota: 999999,
+    costWeight: 0,
     notes:
-      'Adopted as an MCP gateway. Fronts YC directory, Google Maps, exhibitor ' +
-      'lists, Product Hunt and dozens of other scrapers behind ONE credential.',
+      'Self-hosted Crawlee + Playwright with stealth. Replaces paid Apify — ' +
+      '$0 cost. Handles YC, LinkedIn, Glassdoor, Capterra, Clutch, ThomasNet, ' +
+      'Manta, Wellfound, TrustRadius, Google Business via browser automation.',
   },
 
   // ── Lead Gen: B2B databases & Chrome extensions ──────────────────────────
@@ -309,9 +307,9 @@ export const PLATFORMS: Platform[] = [
     onboarding: 'assisted_cookie',
     provides: ['hiring', 'funding', 'launch'],
     fields: [{ key: 'sessionCookie', label: 'Session Cookie', secret: true }],
-    gateway: { kind: 'mcp', name: 'Apify MCP' },
     defaultQuota: 2000,
     costWeight: 2,
+    notes: 'Scraped via self-hosted Crawlee engine with stealth browser.',
   },
   {
     id: 'openvc',
@@ -332,10 +330,9 @@ export const PLATFORMS: Platform[] = [
     onboarding: 'none',
     provides: ['yc', 'hiring', 'launch'],
     fields: [],
-    gateway: { kind: 'mcp', name: 'Apify MCP' },
     defaultQuota: 50000,
     costWeight: 0,
-    notes: 'Public directory scraped via the Apify gateway (batch, isHiring).',
+    notes: 'Public directory scraped via self-hosted Crawlee (batch, isHiring).',
   },
   {
     id: 'g2',
@@ -356,9 +353,9 @@ export const PLATFORMS: Platform[] = [
     onboarding: 'assisted_cookie',
     provides: ['tech_stack', 'digital_footprint'],
     fields: [{ key: 'sessionCookie', label: 'Session Cookie', secret: true }],
-    gateway: { kind: 'mcp', name: 'Apify MCP' },
     defaultQuota: 2000,
     costWeight: 2,
+    notes: 'Scraped via self-hosted Crawlee engine with stealth browser.',
   },
   {
     id: 'trustradius',
@@ -379,9 +376,9 @@ export const PLATFORMS: Platform[] = [
     onboarding: 'assisted_cookie',
     provides: ['tech_stack', 'local'],
     fields: [{ key: 'sessionCookie', label: 'Session Cookie', secret: true }],
-    gateway: { kind: 'mcp', name: 'Apify MCP' },
     defaultQuota: 2000,
     costWeight: 2,
+    notes: 'Scraped via self-hosted Crawlee engine with stealth browser.',
   },
   {
     id: 'wappalyzer',
@@ -451,9 +448,9 @@ export const PLATFORMS: Platform[] = [
     onboarding: 'assisted_cookie',
     provides: ['local'],
     fields: [{ key: 'sessionCookie', label: 'Session Cookie', secret: true }],
-    gateway: { kind: 'mcp', name: 'Apify MCP' },
     defaultQuota: 2000,
     costWeight: 2,
+    notes: 'Scraped via self-hosted Crawlee engine with stealth browser.',
   },
   {
     id: 'manta',
@@ -463,9 +460,9 @@ export const PLATFORMS: Platform[] = [
     onboarding: 'assisted_cookie',
     provides: ['local'],
     fields: [{ key: 'sessionCookie', label: 'Session Cookie', secret: true }],
-    gateway: { kind: 'mcp', name: 'Apify MCP' },
     defaultQuota: 2000,
     costWeight: 2,
+    notes: 'Scraped via self-hosted Crawlee engine with stealth browser.',
   },
 
   // ── Signal enrichment engine + supporting public sources ─────────────────
@@ -536,9 +533,9 @@ export const PLATFORMS: Platform[] = [
     onboarding: 'assisted_cookie',
     provides: ['attrition'],
     fields: [{ key: 'sessionCookie', label: 'Session Cookie', secret: true }],
-    gateway: { kind: 'mcp', name: 'Apify MCP' },
     defaultQuota: 2000,
     costWeight: 2,
+    notes: 'Scraped via self-hosted Crawlee engine with stealth browser.',
   },
   {
     id: 'similarweb',
