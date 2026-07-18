@@ -10,9 +10,11 @@ import {
   rejectEnterpriseTarget,
 } from '../core/rooms.js';
 import { RoomControlService } from '../services/roomControl.js';
+import { SignalCollectorService } from '../services/sourceCollectors.js';
 
 export const roomsApi = Router();
 const rooms = new RoomControlService(db);
+const collectors = new SignalCollectorService(db);
 const roomIds = new Set<RoomMode>(Object.keys(ROOM_LABELS) as RoomMode[]);
 
 function roomOrThrow(value: unknown): RoomMode {
@@ -120,6 +122,37 @@ roomsApi.post('/signals/manual', (req, res) => handle(res, () => {
   return { ok: true, id: info.lastInsertRowid, room, status: 'candidate' };
 }));
 
+/**
+ * Manual/import collector for X, Facebook groups, LinkedIn, Upwork, Google Alerts,
+ * F5Bot and n8n. Each item must carry a source URL so the signal remains auditable.
+ */
+roomsApi.post('/imports/:sourceId', (req, res) => handle(res, () => {
+  const room = roomOrThrow(req.body?.room);
+  rooms.assertActive(room);
+  if (room !== 'referrals_room' && room !== 'community_monitoring_room') throw new Error('Imports are only supported in Room 3 or Room 4.');
+  const source = validatePartnerAccountCount(req.params.sourceId, 1);
+  if (source.room !== room) throw new Error(`${source.name} is not configured for ${room}.`);
+  const strategyId = String(req.body?.strategyId || '').trim();
+  if (!strategyId) throw new Error('strategyId is required.');
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!items.length) throw new Error('items are required.');
+  const strategy = collectors.loadStrategy(strategyId);
+  return { ok: true, room, sourceId: source.id, ...collectors.ingestImported(room, source.id, strategy, items) };
+}));
+
+/** Webhook alias for n8n, F5Bot-forwarded alerts and operator-controlled automations. */
+roomsApi.post('/webhooks/:sourceId', (req, res) => handle(res, () => {
+  const room = roomOrThrow(req.body?.room);
+  rooms.assertActive(room);
+  const source = validatePartnerAccountCount(req.params.sourceId, 1);
+  if (source.room !== room) throw new Error(`${source.name} is not configured for ${room}.`);
+  const strategyId = String(req.body?.strategyId || '').trim();
+  if (!strategyId) throw new Error('strategyId is required.');
+  const items = Array.isArray(req.body?.items) ? req.body.items : [req.body?.item ?? req.body];
+  const strategy = collectors.loadStrategy(strategyId);
+  return { ok: true, room, sourceId: source.id, ...collectors.ingestImported(room, source.id, strategy, items) };
+}));
+
 roomsApi.post('/signals/select', (req, res) => handle(res, () => {
   rooms.assertActive('selection_enrichment_room');
   const ids = Array.isArray(req.body?.signalIds) ? req.body.signalIds.map(Number).filter(Number.isFinite) : [];
@@ -145,17 +178,53 @@ roomsApi.post('/signals/:id/reject', (req, res) => handle(res, () => {
   return { ok: true, rejected: info.changes };
 }));
 
-roomsApi.post('/:room/run', (req, res) => handle(res, () => {
+roomsApi.post('/:room/run', (req, res) => handle(res, async () => {
   const room = roomOrThrow(req.params.room);
   rooms.assertActive(room);
-  const sources = room === 'referrals_room' || room === 'community_monitoring_room' ? freeSourcesForRoom(room) : [];
+  const sourceCatalog = room === 'referrals_room' || room === 'community_monitoring_room' ? freeSourcesForRoom(room) : [];
+  const strategyId = String(req.body?.strategyId || '').trim();
+  if ((room === 'referrals_room' || room === 'community_monitoring_room') && !strategyId) throw new Error('strategyId is required.');
+
+  const requested = Array.isArray(req.body?.sourceIds) && req.body.sourceIds.length
+    ? req.body.sourceIds.map(String)
+    : sourceCatalog.map((source) => source.id);
+  const selected = sourceCatalog.filter((source) => requested.includes(source.id));
   const run = db.prepare(`INSERT INTO room_runs (room,status,triggered_by,summary_json) VALUES (?,?,?,?)`)
-    .run(room, 'triggered', req.body?.actor || 'admin', JSON.stringify({ strategyId: req.body?.strategyId ?? null, sources: sources.map((s) => s.id) }));
+    .run(room, 'running', req.body?.actor || 'admin', JSON.stringify({ strategyId, sources: selected.map((s) => s.id) }));
+
+  if (room !== 'referrals_room' && room !== 'community_monitoring_room') {
+    db.prepare(`UPDATE room_runs SET status='completed',completed_at=datetime('now') WHERE id=?`).run(run.lastInsertRowid);
+    return { ok: true, runId: run.lastInsertRowid, room, processed: 0, inserted: 0 };
+  }
+
+  const strategy = collectors.loadStrategy(strategyId);
+  const sourceConfigs = req.body?.sourceConfigs && typeof req.body.sourceConfigs === 'object' ? req.body.sourceConfigs : {};
+  const results: any[] = [];
+  let totalCollected = 0;
+  let totalInserted = 0;
+
+  for (const source of selected) {
+    const started = Date.now();
+    try {
+      const signals = await collectors.run(room, source.id, strategy, sourceConfigs[source.id] ?? {});
+      const inserted = collectors.persist(room, strategy, signals);
+      totalCollected += signals.length;
+      totalInserted += inserted;
+      results.push({ sourceId: source.id, ok: true, collected: signals.length, inserted, latencyMs: Date.now() - started });
+    } catch (error: any) {
+      results.push({ sourceId: source.id, ok: false, collected: 0, inserted: 0, error: error?.message ?? 'collector failed', latencyMs: Date.now() - started });
+    }
+  }
+
+  db.prepare(`UPDATE room_runs SET status='completed',completed_at=datetime('now'),summary_json=? WHERE id=?`)
+    .run(JSON.stringify({ strategyId, totalCollected, totalInserted, results }), run.lastInsertRowid);
   return {
     ok: true,
     runId: run.lastInsertRowid,
     room,
-    sources,
-    message: 'Room trigger accepted. Only configured, authorized sources may execute; other rooms remain silent.',
+    collected: totalCollected,
+    inserted: totalInserted,
+    results,
+    message: 'Configured live collectors executed. Manual-only sources accept evidence through imports or webhooks.',
   };
 }));
