@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { migrate } from './db/index.js';
 import { api } from './routes/api.js';
+import { roomsApi } from './routes/rooms.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4000);
@@ -19,6 +20,7 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'signal-forge' }));
+app.use('/api/rooms', roomsApi);
 app.use('/api', api);
 
 // Serve built dashboard if present (production single-artifact deploy).
