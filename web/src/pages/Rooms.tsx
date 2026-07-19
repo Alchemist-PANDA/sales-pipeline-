@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { DoorOpen, PauseCircle, Play, RefreshCw, Upload, CheckSquare, Plus, Sparkles, ExternalLink } from 'lucide-react';
+import { DoorOpen, PauseCircle, Play, RefreshCw, Upload, CheckSquare, Plus, Sparkles, ExternalLink, ShieldCheck, Gauge, FlaskConical, Zap } from 'lucide-react';
 import { api } from '../lib/api';
 
 const ROOMS = [
@@ -35,6 +35,11 @@ export default function Rooms() {
   const [inbox, setInbox] = useState<any[]>([]);
   const [inboxCounts, setInboxCounts] = useState<any[]>([]);
   const [picked, setPicked] = useState<Set<number>>(new Set());
+
+  // Safety controls
+  const [mode, setMode] = useState<'test' | 'live'>('test');
+  const [validation, setValidation] = useState<any | null>(null);
+  const [preflight, setPreflight] = useState<any | null>(null);
 
   // New-strategy form
   const [showStrategyForm, setShowStrategyForm] = useState(false);
@@ -109,9 +114,18 @@ export default function Rooms() {
     setLastRun(null);
     let parsedConfigs = {};
     try { parsedConfigs = JSON.parse(sourceConfigs || '{}'); } catch { throw new Error('Source configuration must be valid JSON.'); }
-    const result = await api.post(`/rooms/${activeRoom}/run`, { actor: 'admin', strategyId, sourceIds: selectedSources, sourceConfigs: parsedConfigs });
+    const result = await api.post(`/rooms/${activeRoom}/run`, { actor: 'admin', strategyId, sourceIds: selectedSources, sourceConfigs: parsedConfigs, mode });
     setLastRun(result);
-    if (isSelectionRoom) await loadInbox();
+    await loadInbox().catch(() => {});
+  });
+
+  const runPreflight = () => run(async () => {
+    setPreflight(null);
+    setPreflight(await api.get(`/rooms/${activeRoom}/preflight`));
+  });
+
+  const validateCredentials = () => run(async () => {
+    setValidation(await api.post('/credentials/validate', {}));
   });
 
   const importEvidence = () => run(async () => {
@@ -130,7 +144,7 @@ export default function Rooms() {
     await loadInbox();
   });
   const enrichSelected = () => run(async () => {
-    const r = await api.post('/rooms/signals/enrich', {});
+    const r = await api.post('/rooms/signals/enrich', { mode });
     setLastRun(r);
     await loadInbox();
   });
@@ -144,14 +158,72 @@ export default function Rooms() {
           <h1 className="text-2xl font-bold text-white">Room Control</h1>
           <p className="text-sm text-slate-400 mt-1">Exactly one manually triggered room may operate at a time.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Test/Live safety toggle — Test never spends API credits. */}
+          <div className="inline-flex rounded-lg border border-slate-700 overflow-hidden">
+            <button onClick={() => setMode('test')} className={`px-3 py-2 text-sm flex items-center gap-1.5 ${mode === 'test' ? 'bg-emerald-500/20 text-emerald-200' : 'text-slate-400 hover:text-slate-200'}`}>
+              <FlaskConical className="w-4 h-4" /> Test
+            </button>
+            <button onClick={() => setMode('live')} className={`px-3 py-2 text-sm flex items-center gap-1.5 ${mode === 'live' ? 'bg-gold-500/20 text-gold-200' : 'text-slate-400 hover:text-slate-200'}`}>
+              <Zap className="w-4 h-4" /> Live
+            </button>
+          </div>
+          <button className="btn-secondary" onClick={validateCredentials} disabled={busy}><ShieldCheck className="w-4 h-4" /> Validate keys</button>
           <button className="btn-secondary" onClick={() => load()} disabled={busy}><RefreshCw className="w-4 h-4" /> Refresh</button>
           <button className="btn-secondary" onClick={idle} disabled={busy}><PauseCircle className="w-4 h-4" /> Silence All</button>
+          {(isCollectorRoom || isSelectionRoom) && (
+            <button className="btn-secondary" onClick={runPreflight} disabled={busy}><Gauge className="w-4 h-4" /> Preflight</button>
+          )}
           {isCollectorRoom && (
-            <button className="btn-gold" onClick={trigger} disabled={busy || strategyRequiredMissing}><Play className="w-4 h-4" /> Trigger Active Room</button>
+            <button className="btn-gold" onClick={trigger} disabled={busy || strategyRequiredMissing}><Play className="w-4 h-4" /> Trigger ({mode})</button>
           )}
         </div>
       </header>
+
+      {mode === 'test' && (
+        <div className="card p-3 border-emerald-500/30 bg-emerald-500/5 text-emerald-200 text-sm flex items-center gap-2">
+          <FlaskConical className="w-4 h-4 shrink-0" /> Test mode — synthetic data only, no external calls, <span className="font-semibold">zero API credits spent</span>. Switch to Live once your keys are validated.
+        </div>
+      )}
+
+      {validation && (
+        <section className="card p-5 space-y-2">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-white">Credential validation <span className="text-xs text-slate-500">({validation.mode} mode)</span></h2>
+            <button className="text-slate-500 hover:text-slate-300 text-sm" onClick={() => setValidation(null)}>dismiss</button>
+          </div>
+          {!validation.results?.length && <p className="text-sm text-slate-400">No connected providers with a cheap validation path.</p>}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+            {validation.results?.map((r: any) => (
+              <div key={r.platformId} className="flex items-center justify-between rounded-lg bg-slate-900/60 border border-slate-700/50 px-3 py-2 text-sm">
+                <span className="text-slate-200">{r.platformId} <span className="text-xs text-slate-500">×{r.connectedAccounts}</span></span>
+                <span className={
+                  r.status === 'ok' ? 'text-emerald-300' : r.status === 'failed' ? 'text-red-300' : 'text-slate-400'
+                }>{r.status}{r.quotaRemaining != null ? ` · ${r.quotaRemaining} left` : ''}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-slate-500">Validation uses each provider's free account/quota endpoint — it never spends enrichment credits, and results are cached.</p>
+        </section>
+      )}
+
+      {preflight && (
+        <section className="card p-5 space-y-2 border-gold-500/30">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-white">Preflight — {preflight.action} in {preflight.room}</h2>
+            <button className="text-slate-500 hover:text-slate-300 text-sm" onClick={() => setPreflight(null)}>dismiss</button>
+          </div>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <span className="text-slate-300">Est. live calls: <span className="text-gold-300 font-semibold">{preflight.estimatedLiveCalls}</span></span>
+            {preflight.selectedSignals != null && <span className="text-slate-300">Selected signals: <span className="text-white font-semibold">{preflight.selectedSignals}</span></span>}
+            <span className="text-slate-400">Budget cap: {preflight.limits?.maxExternalCalls} calls / ${preflight.limits?.maxCostUsd}</span>
+          </div>
+          {preflight.missingCredentials?.length > 0 && (
+            <div className="text-sm text-amber-300">Missing credentials: {preflight.missingCredentials.join(', ')}</div>
+          )}
+          <p className="text-xs text-slate-500">{preflight.note}</p>
+        </section>
+      )}
 
       {error && <div className="card p-4 border-red-500/30 text-red-300">{error}</div>}
 
@@ -296,7 +368,7 @@ export default function Rooms() {
             </div>
             <div className="flex gap-2">
               <button className="btn-secondary" onClick={selectPicked} disabled={busy || !picked.size}><CheckSquare className="w-4 h-4" /> Select ({picked.size})</button>
-              <button className="btn-gold" onClick={enrichSelected} disabled={busy}><Sparkles className="w-4 h-4" /> Enrich selected</button>
+              <button className="btn-gold" onClick={enrichSelected} disabled={busy}><Sparkles className="w-4 h-4" /> Enrich selected ({mode})</button>
             </div>
           </div>
           <div className="flex flex-wrap gap-3 text-xs text-slate-400">
@@ -336,11 +408,40 @@ export default function Rooms() {
       )}
 
       {lastRun && (
-        <section className="card p-5">
-          <h2 className="font-semibold text-white">Last operation</h2>
-          <pre className="mt-3 overflow-auto whitespace-pre-wrap text-xs text-slate-300">{JSON.stringify(lastRun, null, 2)}</pre>
+        <section className="card p-5 space-y-3">
+          <div className="flex items-center justify-between">
+            <h2 className="font-semibold text-white">Last operation
+              {lastRun.mode && <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${lastRun.mode === 'test' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-gold-500/15 text-gold-300'}`}>{lastRun.mode}</span>}
+            </h2>
+            <button className="text-slate-500 hover:text-slate-300 text-sm" onClick={() => setLastRun(null)}>dismiss</button>
+          </div>
+          {lastRun.note && <div className="text-sm text-amber-300">{lastRun.note}</div>}
+          {lastRun.runStats && (
+            <div className="flex flex-wrap gap-4 text-sm">
+              <Stat label="Real calls" value={lastRun.runStats.realCalls} tone={lastRun.runStats.realCalls ? 'gold' : 'emerald'} />
+              <Stat label="Synthetic" value={lastRun.runStats.synthesized} />
+              <Stat label="Cache hits" value={lastRun.runStats.cacheHits} />
+              <Stat label="Skipped (budget)" value={lastRun.runStats.skippedByBudget} tone={lastRun.runStats.skippedByBudget ? 'amber' : undefined} />
+              <Stat label="Failures" value={lastRun.runStats.failures} tone={lastRun.runStats.failures ? 'red' : undefined} />
+              {typeof lastRun.enriched === 'number' && <Stat label="Leads" value={lastRun.opportunities ?? lastRun.enriched} tone="gold" />}
+              {typeof lastRun.inserted === 'number' && <Stat label="Signals in" value={lastRun.inserted} />}
+            </div>
+          )}
+          <details className="text-xs text-slate-400">
+            <summary className="cursor-pointer">raw response</summary>
+            <pre className="mt-2 overflow-auto whitespace-pre-wrap text-slate-300">{JSON.stringify(lastRun, null, 2)}</pre>
+          </details>
         </section>
       )}
+    </div>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: number; tone?: 'emerald' | 'gold' | 'amber' | 'red' }) {
+  const color = tone === 'emerald' ? 'text-emerald-300' : tone === 'gold' ? 'text-gold-300' : tone === 'amber' ? 'text-amber-300' : tone === 'red' ? 'text-red-300' : 'text-white';
+  return (
+    <div className="rounded-lg bg-slate-900/60 border border-slate-700/50 px-3 py-1.5">
+      <span className={`font-semibold ${color}`}>{value}</span> <span className="text-xs text-slate-500">{label}</span>
     </div>
   );
 }

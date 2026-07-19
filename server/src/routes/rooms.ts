@@ -12,6 +12,8 @@ import {
 import { RoomControlService } from '../services/roomControl.js';
 import { SignalCollectorService } from '../services/sourceCollectors.js';
 import { RoomEnrichmentService } from '../services/roomEnrichment.js';
+import { RunContext, resolveRunMode } from '../core/runContext.js';
+import { WATERFALL_ORDER } from '../core/registry.js';
 
 export const roomsApi = Router();
 const rooms = new RoomControlService(db);
@@ -195,7 +197,10 @@ roomsApi.get('/signals/inbox', (req, res) => handle(res, () => {
 /** Run enrichment on all selected signals → companies, people, opportunities. */
 roomsApi.post('/signals/enrich', (req, res) => handle(res, async () => {
   rooms.assertActive('selection_enrichment_room');
-  return { ok: true, ...(await enrichment.enrichSelected(req.body?.actor || 'admin', Number(req.body?.limit ?? 50))) };
+  const { mode, forcedTest, reason } = resolveRunMode(req.body?.mode);
+  const ctx = new RunContext(mode);
+  const result = await enrichment.enrichSelected(ctx, req.body?.actor || 'admin', Number(req.body?.limit ?? 50));
+  return { ok: true, mode, ...(forcedTest ? { note: reason } : {}), ...result };
 }));
 
 /** Finished actionable leads (enriched opportunities), newest/highest-priority first. */
@@ -268,6 +273,8 @@ roomsApi.post('/:room/run', (req, res) => handle(res, async () => {
 
   const strategy = collectors.loadStrategy(strategyId);
   const sourceConfigs = req.body?.sourceConfigs && typeof req.body.sourceConfigs === 'object' ? req.body.sourceConfigs : {};
+  const { mode, forcedTest, reason } = resolveRunMode(req.body?.mode);
+  const ctx = new RunContext(mode);
   const results: any[] = [];
   let totalCollected = 0;
   let totalInserted = 0;
@@ -275,7 +282,7 @@ roomsApi.post('/:room/run', (req, res) => handle(res, async () => {
   for (const source of selected) {
     const started = Date.now();
     try {
-      const signals = await collectors.run(room, source.id, strategy, sourceConfigs[source.id] ?? {});
+      const signals = await collectors.run(room, source.id, strategy, sourceConfigs[source.id] ?? {}, ctx);
       const inserted = collectors.persist(room, strategy, signals);
       totalCollected += signals.length;
       totalInserted += inserted;
@@ -286,14 +293,62 @@ roomsApi.post('/:room/run', (req, res) => handle(res, async () => {
   }
 
   db.prepare(`UPDATE room_runs SET status='completed',completed_at=datetime('now'),summary_json=? WHERE id=?`)
-    .run(JSON.stringify({ strategyId, totalCollected, totalInserted, results }), run.lastInsertRowid);
+    .run(JSON.stringify({ strategyId, mode, totalCollected, totalInserted, results, runStats: ctx.summary() }), run.lastInsertRowid);
   return {
     ok: true,
     runId: run.lastInsertRowid,
     room,
+    mode,
+    ...(forcedTest ? { note: reason } : {}),
     collected: totalCollected,
     inserted: totalInserted,
     results,
-    message: 'Configured live collectors executed. Manual-only sources accept evidence through imports or webhooks.',
+    runStats: ctx.summary(),
+    message: mode === 'test'
+      ? 'TEST MODE — synthetic candidates only, no external calls and no credits spent.'
+      : 'LIVE MODE — configured collectors executed within the run budget.',
+  };
+}));
+
+/**
+ * Preflight — report exactly what a LIVE trigger of this room would do, WITHOUT
+ * making any external call: sources involved, providers, estimated calls, budget
+ * caps, and which required credentials are connected. Lets an operator see the
+ * cost before spending anything.
+ */
+roomsApi.get('/:room/preflight', (req, res) => handle(res, () => {
+  const room = roomOrThrow(req.params.room);
+  const isFreeSourceRoom = room === 'referrals_room' || room === 'community_monitoring_room';
+  const sources = isFreeSourceRoom
+    ? freeSourcesForRoom(room).map((s) => ({ id: s.id, name: s.name, cost: s.cost }))
+    : room === 'signal_room'
+      ? [{ id: 'signal_discovery', name: 'Strategy-driven web discovery', cost: 'free' }]
+      : [];
+
+  const connectedByPlatform = (db.prepare(
+    `SELECT platform_id, COUNT(*) n FROM accounts WHERE status='connected' GROUP BY platform_id`,
+  ).all() as { platform_id: string; n: number }[]).reduce((m, r) => (m[r.platform_id] = r.n, m), {} as Record<string, number>);
+
+  const limits = new RunContext('test').limits;
+
+  if (room === 'selection_enrichment_room') {
+    const pending = (db.prepare(`SELECT COUNT(*) n FROM signal_events WHERE status='selected_for_enrichment'`).get() as any).n;
+    const waterfall = WATERFALL_ORDER.map((p) => ({ providerId: p.id, connectedAccounts: connectedByPlatform[p.id] ?? 0, hasCredential: (connectedByPlatform[p.id] ?? 0) > 0 }));
+    return {
+      room, action: 'enrich_selected', selectedSignals: pending,
+      estimatedLiveCalls: pending * waterfall.filter((w) => w.hasCredential).length || 0,
+      providers: waterfall, limits,
+      missingCredentials: waterfall.filter((w) => !w.hasCredential).map((w) => w.providerId),
+      note: 'Estimate assumes each selected signal walks the credentialed waterfall until a verified email is found (usually fewer calls).',
+    };
+  }
+
+  const estPerSource = 8; // capped queries/fetches per source
+  return {
+    room, action: 'collect', sources,
+    estimatedLiveCalls: sources.length * estPerSource, limits,
+    note: room === 'signal_room' || isFreeSourceRoom
+      ? 'Discovery uses free/public sources; live calls are web/API fetches capped by the run budget.'
+      : 'This room does not run collectors.',
   };
 }));

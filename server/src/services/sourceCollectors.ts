@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { googleResearch, buildSignalQueries } from '../research/google.js';
 import type { RoomMode } from '../core/rooms.js';
+import { RunContext } from '../core/runContext.js';
 
 export interface CollectorStrategy {
   id: string;
@@ -98,27 +99,32 @@ export class SignalCollectorService {
     };
   }
 
-  async run(room: RoomMode, sourceId: string, strategy: CollectorStrategy, config: SourceRunConfig = {}) {
+  async run(room: RoomMode, sourceId: string, strategy: CollectorStrategy, config: SourceRunConfig = {}, ctx?: RunContext) {
+    const context = ctx ?? new RunContext('test');
+    // TEST MODE: never touch the network. Produce deterministic, clearly-marked
+    // synthetic candidates so the full workflow can be exercised without keys.
+    if (context.isTest) return this.synthesize(sourceId, strategy, config, context);
+
     switch (sourceId) {
       case 'signal_discovery':
-        return this.collectSignalDiscovery(strategy, config);
+        return this.collectSignalDiscovery(strategy, config, context);
       case 'google_search':
-        return this.collectGoogleReferrals(strategy, config);
+        return this.collectGoogleReferrals(strategy, config, context);
       case 'clutch_basic':
-        return this.collectDirectory('clutch.co', 'Clutch', strategy, config);
+        return this.collectDirectory('clutch.co', 'Clutch', strategy, config, context);
       case 'goodfirms_basic':
-        return this.collectDirectory('goodfirms.co', 'GoodFirms', strategy, config);
+        return this.collectDirectory('goodfirms.co', 'GoodFirms', strategy, config, context);
       case 'g2_basic':
-        return this.collectDirectory('g2.com', 'G2', strategy, config);
+        return this.collectDirectory('g2.com', 'G2', strategy, config, context);
       case 'google_community_research':
-        return this.collectGoogleCommunities(strategy, config);
+        return this.collectGoogleCommunities(strategy, config, context);
       case 'reddit_api':
       case 'praw':
-        return this.collectReddit(strategy, config);
+        return this.collectReddit(strategy, config, context);
       case 'discord_bot':
-        return this.collectDiscord(strategy, config);
+        return this.collectDiscord(strategy, config, context);
       case 'slack_app':
-        return this.collectSlack(strategy, config);
+        return this.collectSlack(strategy, config, context);
       case 'n8n_self_hosted':
       case 'google_alerts':
       case 'f5bot':
@@ -132,6 +138,44 @@ export class SignalCollectorService {
       default:
         throw new Error(`Collector not implemented for source: ${sourceId}`);
     }
+  }
+
+  /**
+   * Deterministic synthetic discovery for TEST MODE. Derives believable, source-
+   * linked candidate signals from the strategy so operators can validate the
+   * entire pipeline (discovery → selection → enrichment → lead) at zero cost.
+   * Every synthetic signal is explicitly flagged so it can never be mistaken for
+   * real, verified evidence.
+   */
+  private synthesize(sourceId: string, strategy: CollectorStrategy, config: SourceRunConfig, ctx: RunContext): CollectedSignal[] {
+    const count = Math.min(Math.max(1, config.maxResults ?? 6), 12);
+    const industries = strategy.industries.length ? strategy.industries : ['SME'];
+    const pains = strategy.pains.length ? strategy.pains : ['manual processes'];
+    const signals = strategy.signals.length ? strategy.signals : ['hiring'];
+    const suffixes = ['Logistics', 'Systems', 'Group', 'Labs', 'Partners', 'Collective', 'Works', 'Digital', 'Studio', 'Co'];
+    const out: CollectedSignal[] = [];
+    for (let i = 0; i < count; i++) {
+      const seed = crypto.createHash('md5').update(`${sourceId}|${strategy.id}|${i}`).digest();
+      const industry = industries[seed[0] % industries.length];
+      const pain = pains[seed[1] % pains.length];
+      const signal = signals[seed[2] % signals.length];
+      const company = `${industry.split(/\s+/)[0]} ${suffixes[seed[3] % suffixes.length]}`;
+      const slug = company.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+      out.push({
+        sourceId,
+        title: `${company} — ${signal} signal (${industry})`,
+        rawText: `${company} shows a "${signal}" signal; likely ${pain}. Synthetic test candidate for pipeline validation.`,
+        url: `https://test-signals.local/${sourceId}/${slug}-${seed.toString('hex').slice(0, 8)}`,
+        companyName: company,
+        confidence: 40,
+        relevance: 45 + (seed[4] % 40),
+        hypotheses: [`possible:${signal}`, `possible:${pain}`],
+        rationale: 'TEST MODE synthetic candidate — no external source was contacted.',
+        metadata: { synthetic: true, mode: 'test', industry },
+      });
+      ctx.recordSynthesized();
+    }
+    return out;
   }
 
   persist(room: RoomMode, strategy: CollectorStrategy, signals: CollectedSignal[]) {
@@ -208,7 +252,7 @@ export class SignalCollectorService {
    * signal-oriented queries from the strategy and returns lead-convertible
    * candidates, each carrying its source link for human credibility review.
    */
-  private async collectSignalDiscovery(strategy: CollectorStrategy, config: SourceRunConfig) {
+  private async collectSignalDiscovery(strategy: CollectorStrategy, config: SourceRunConfig, ctx: RunContext) {
     const queries = config.queries?.length ? config.queries : buildSignalQueries({
       product: strategy.product,
       pains: strategy.pains,
@@ -216,11 +260,11 @@ export class SignalCollectorService {
       industries: strategy.industries,
       country: strategy.country,
     });
-    const signals = await this.googleQueries('signal_discovery', queries, strategy, config.maxResults ?? 10);
+    const signals = await this.googleQueries('signal_discovery', queries, strategy, config.maxResults ?? 10, ctx);
     return signals.map((s) => ({ ...s, rationale: s.rationale ?? 'Discovered via strategy-targeted public web research; may indicate a lead-convertible business event.' }));
   }
 
-  private async collectGoogleReferrals(strategy: CollectorStrategy, config: SourceRunConfig) {
+  private async collectGoogleReferrals(strategy: CollectorStrategy, config: SourceRunConfig, ctx: RunContext) {
     const queries = config.queries?.length ? config.queries : buildSignalQueries({
       product: strategy.product,
       pains: strategy.pains,
@@ -228,18 +272,18 @@ export class SignalCollectorService {
       industries: strategy.industries,
       country: strategy.country,
     });
-    return this.googleQueries('google_search', queries, strategy, config.maxResults ?? 10);
+    return this.googleQueries('google_search', queries, strategy, config.maxResults ?? 10, ctx);
   }
 
-  private async collectDirectory(domain: string, name: string, strategy: CollectorStrategy, config: SourceRunConfig) {
+  private async collectDirectory(domain: string, name: string, strategy: CollectorStrategy, config: SourceRunConfig, ctx: RunContext) {
     const industries = strategy.industries.length ? strategy.industries : ['digital marketing agency', 'software agency'];
     const queries = config.queries?.length ? config.queries : industries.slice(0, 5).map((industry) =>
       `site:${domain} "${industry}" (${strategy.country}) (reviews OR portfolio OR hiring OR partner OR overflow)`
     );
-    return this.googleQueries(`${name.toLowerCase()}_basic`, queries, strategy, config.maxResults ?? 10);
+    return this.googleQueries(`${name.toLowerCase()}_basic`, queries, strategy, config.maxResults ?? 10, ctx);
   }
 
-  private async collectGoogleCommunities(strategy: CollectorStrategy, config: SourceRunConfig) {
+  private async collectGoogleCommunities(strategy: CollectorStrategy, config: SourceRunConfig, ctx: RunContext) {
     const cue = [...strategy.signals, ...strategy.pains, 'need a partner', 'anyone recommend', 'overflow', 'outsource']
       .slice(0, 10).map((x) => `"${x}"`).join(' OR ');
     const queries = config.queries?.length ? config.queries : [
@@ -247,101 +291,104 @@ export class SignalCollectorService {
       `site:x.com (${cue}) (${strategy.industries.join(' OR ') || 'agency OR business'})`,
       `site:facebook.com/groups (${cue}) (${strategy.industries.join(' OR ') || 'agency'})`,
     ];
-    return this.googleQueries('google_community_research', queries, strategy, config.maxResults ?? 10);
+    return this.googleQueries('google_community_research', queries, strategy, config.maxResults ?? 10, ctx);
   }
 
-  private async googleQueries(sourceId: string, queries: string[], strategy: CollectorStrategy, maxResults: number) {
-    const groups = await Promise.all(queries.slice(0, 8).map((query) => googleResearch({
-      query,
-      country: strategy.country,
-      maxResults: Math.min(maxResults, 20),
-      freshness: 'month',
-    }).catch(() => [])));
-    return groups.flat().map((row): CollectedSignal => ({
-      sourceId,
-      title: row.title,
-      rawText: row.snippet || row.title,
-      url: row.url,
-      companyName: row.displayedDomain,
-      confidence: 50,
-      metadata: { displayedDomain: row.displayedDomain },
-    }));
+  /** Budget-aware Google research: each query is one external call charged to the
+   *  run ceiling; when the ceiling is reached, remaining queries are skipped. */
+  private async googleQueries(sourceId: string, queries: string[], strategy: CollectorStrategy, maxResults: number, ctx: RunContext) {
+    const out: CollectedSignal[] = [];
+    for (const query of queries.slice(0, 8)) {
+      if (!ctx.charge(sourceId, 0)) break; // global ceiling reached
+      try {
+        const rows = await googleResearch({ query, country: strategy.country, maxResults: Math.min(maxResults, 20), freshness: 'month' });
+        ctx.recordResult(sourceId, true);
+        for (const row of rows) {
+          out.push({ sourceId, title: row.title, rawText: row.snippet || row.title, url: row.url, companyName: row.displayedDomain, confidence: 50, metadata: { displayedDomain: row.displayedDomain } });
+        }
+      } catch {
+        ctx.recordResult(sourceId, false);
+      }
+    }
+    return out;
   }
 
-  private async collectReddit(strategy: CollectorStrategy, config: SourceRunConfig) {
+  private async collectReddit(strategy: CollectorStrategy, config: SourceRunConfig, ctx: RunContext) {
     const subreddits = config.subreddits?.length ? config.subreddits : ['marketing', 'SEO', 'digital_marketing', 'smallbusiness', 'Entrepreneur', 'agency', 'LeadGeneration'];
     const limit = Math.min(config.maxResults ?? 25, 100);
     const headers: Record<string, string> = { 'User-Agent': config.reddit?.userAgent || 'AlchemistSignalForge/1.0' };
     if (config.reddit?.accessToken) headers.Authorization = `Bearer ${config.reddit.accessToken}`;
     const base = config.reddit?.accessToken ? 'https://oauth.reddit.com' : 'https://www.reddit.com';
-    const groups = await Promise.all(subreddits.slice(0, 20).map(async (subreddit) => {
-      const response = await fetch(`${base}/r/${encodeURIComponent(subreddit)}/new.json?limit=${limit}`, { headers });
-      if (!response.ok) return [];
-      const json: any = await response.json();
-      return (json?.data?.children ?? []).map((child: any): CollectedSignal => {
-        const post = child.data;
-        return {
-          sourceId: 'reddit_api',
-          title: cleanText(post.title),
-          rawText: cleanText(`${post.title} ${post.selftext || ''}`),
-          url: `https://www.reddit.com${post.permalink}`,
-          author: post.author,
-          publishedAt: post.created_utc ? new Date(post.created_utc * 1000).toISOString() : undefined,
-          confidence: 60,
-          metadata: { subreddit: post.subreddit, score: post.score, comments: post.num_comments },
-        };
-      });
-    }));
-    return groups.flat();
+    const out: CollectedSignal[] = [];
+    for (const subreddit of subreddits.slice(0, 20)) {
+      if (!ctx.charge('reddit_api', 0)) break;
+      try {
+        const response = await fetch(`${base}/r/${encodeURIComponent(subreddit)}/new.json?limit=${limit}`, { headers });
+        if (!response.ok) { ctx.recordResult('reddit_api', false); continue; }
+        const json: any = await response.json();
+        ctx.recordResult('reddit_api', true);
+        for (const child of json?.data?.children ?? []) {
+          const post = child.data;
+          out.push({
+            sourceId: 'reddit_api', title: cleanText(post.title), rawText: cleanText(`${post.title} ${post.selftext || ''}`),
+            url: `https://www.reddit.com${post.permalink}`, author: post.author,
+            publishedAt: post.created_utc ? new Date(post.created_utc * 1000).toISOString() : undefined,
+            confidence: 60, metadata: { subreddit: post.subreddit, score: post.score, comments: post.num_comments },
+          });
+        }
+      } catch { ctx.recordResult('reddit_api', false); }
+    }
+    return out;
   }
 
-  private async collectDiscord(_strategy: CollectorStrategy, config: SourceRunConfig) {
+  private async collectDiscord(_strategy: CollectorStrategy, config: SourceRunConfig, ctx: RunContext) {
     const token = config.discord?.botToken || process.env.DISCORD_BOT_TOKEN;
     const channelIds = config.discord?.channelIds ?? [];
     if (!token || !channelIds.length) return [];
-    const groups = await Promise.all(channelIds.slice(0, 100).map(async (channelId) => {
-      const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages?limit=${Math.min(config.maxResults ?? 50, 100)}`, {
-        headers: { Authorization: `Bot ${token}` },
-      });
-      if (!response.ok) return [];
-      const rows: any[] = await response.json();
-      return rows.filter((row) => row.content).map((row): CollectedSignal => ({
-        sourceId: 'discord_bot',
-        title: `Discord message from ${row.author?.username ?? 'member'}`,
-        rawText: cleanText(row.content),
-        url: `https://discord.com/channels/@me/${channelId}/${row.id}`,
-        author: row.author?.username,
-        publishedAt: row.timestamp,
-        confidence: 65,
-        metadata: { channelId, messageId: row.id },
-      }));
-    }));
-    return groups.flat();
+    const out: CollectedSignal[] = [];
+    for (const channelId of channelIds.slice(0, 100)) {
+      if (!ctx.charge('discord_bot', 0)) break;
+      try {
+        const response = await fetch(`https://discord.com/api/v10/channels/${channelId}/messages?limit=${Math.min(config.maxResults ?? 50, 100)}`, { headers: { Authorization: `Bot ${token}` } });
+        if (!response.ok) { ctx.recordResult('discord_bot', false); continue; }
+        const rows: any[] = await response.json();
+        ctx.recordResult('discord_bot', true);
+        for (const row of rows.filter((r) => r.content)) {
+          out.push({
+            sourceId: 'discord_bot', title: `Discord message from ${row.author?.username ?? 'member'}`, rawText: cleanText(row.content),
+            url: `https://discord.com/channels/@me/${channelId}/${row.id}`, author: row.author?.username,
+            publishedAt: row.timestamp, confidence: 65, metadata: { channelId, messageId: row.id },
+          });
+        }
+      } catch { ctx.recordResult('discord_bot', false); }
+    }
+    return out;
   }
 
-  private async collectSlack(_strategy: CollectorStrategy, config: SourceRunConfig) {
+  private async collectSlack(_strategy: CollectorStrategy, config: SourceRunConfig, ctx: RunContext) {
     const token = config.slack?.botToken || process.env.SLACK_BOT_TOKEN;
     const channelIds = config.slack?.channelIds ?? [];
     if (!token || !channelIds.length) return [];
-    const groups = await Promise.all(channelIds.slice(0, 100).map(async (channelId) => {
-      const params = new URLSearchParams({ channel: channelId, limit: String(Math.min(config.maxResults ?? 100, 200)) });
-      const response = await fetch(`https://slack.com/api/conversations.history?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-      if (!response.ok) return [];
-      const json: any = await response.json();
-      if (!json.ok) return [];
-      return (json.messages ?? []).filter((row: any) => row.text).map((row: any): CollectedSignal => ({
-        sourceId: 'slack_app',
-        title: `Slack message in ${channelId}`,
-        rawText: cleanText(row.text),
-        // Slack does not expose a universal permalink without an additional API call.
-        // Preserve an auditable source URI that the authorized workspace integration can resolve.
-        url: `https://slack.com/app_redirect?channel=${encodeURIComponent(channelId)}&message_ts=${encodeURIComponent(row.ts)}`,
-        author: row.user,
-        publishedAt: row.ts ? new Date(Number(row.ts) * 1000).toISOString() : undefined,
-        confidence: 70,
-        metadata: { channelId, ts: row.ts, threadTs: row.thread_ts },
-      }));
-    }));
-    return groups.flat();
+    const out: CollectedSignal[] = [];
+    for (const channelId of channelIds.slice(0, 100)) {
+      if (!ctx.charge('slack_app', 0)) break;
+      try {
+        const params = new URLSearchParams({ channel: channelId, limit: String(Math.min(config.maxResults ?? 100, 200)) });
+        const response = await fetch(`https://slack.com/api/conversations.history?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!response.ok) { ctx.recordResult('slack_app', false); continue; }
+        const json: any = await response.json();
+        if (!json.ok) { ctx.recordResult('slack_app', false); continue; }
+        ctx.recordResult('slack_app', true);
+        for (const row of (json.messages ?? []).filter((r: any) => r.text)) {
+          out.push({
+            sourceId: 'slack_app', title: `Slack message in ${channelId}`, rawText: cleanText(row.text),
+            url: `https://slack.com/app_redirect?channel=${encodeURIComponent(channelId)}&message_ts=${encodeURIComponent(row.ts)}`,
+            author: row.user, publishedAt: row.ts ? new Date(Number(row.ts) * 1000).toISOString() : undefined,
+            confidence: 70, metadata: { channelId, ts: row.ts, threadTs: row.thread_ts },
+          });
+        }
+      } catch { ctx.recordResult('slack_app', false); }
+    }
+    return out;
   }
 }

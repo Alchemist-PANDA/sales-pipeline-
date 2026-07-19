@@ -15,6 +15,8 @@ import type { AccountRow } from '../core/pool.js';
 import { PLATFORMS_BY_ID } from '../core/registry.js';
 import { ScraperConnector } from './scraper.js';
 import { hasScraperSupport } from '../scrapers/platforms/index.js';
+import { ApiConnector, hasApiAdapter } from './api.js';
+import type { RunMode } from '../core/runContext.js';
 
 const INDUSTRIES = ['B2B SaaS', 'E-commerce', 'FinTech', 'Healthcare', 'Professional Services', 'Marketing Agency', 'Manufacturing'];
 const CITIES = ['Austin, TX', 'San Francisco, CA', 'New York, NY', 'Denver, CO', 'Miami, FL', 'Chicago, IL', 'Remote'];
@@ -108,13 +110,28 @@ class DemoConnector implements Connector {
 }
 
 const cache = new Map<string, Connector>();
-export function getConnector(platformId: string): Connector {
-  if (!cache.has(platformId)) {
-    if (!DEMO && hasScraperSupport(platformId)) {
-      cache.set(platformId, new ScraperConnector(platformId));
+
+/**
+ * Select the connector for a platform under a given run mode.
+ *   test → always the deterministic demo connector (ZERO external calls)
+ *   live → real path: ApiConnector (has adapter) or ScraperConnector (scraper
+ *          platform); otherwise the demo connector as a labeled fallback.
+ *
+ * The mode is part of the cache key so a test run and a live run never share a
+ * connector instance.
+ */
+export function getConnector(platformId: string, mode: RunMode = DEMO ? 'test' : 'live'): Connector {
+  const key = `${mode}:${platformId}`;
+  if (!cache.has(key)) {
+    let connector: Connector;
+    if (mode === 'live' && hasApiAdapter(platformId)) {
+      connector = new ApiConnector(platformId);
+    } else if (mode === 'live' && hasScraperSupport(platformId)) {
+      connector = new ScraperConnector(platformId);
     } else {
-      cache.set(platformId, new DemoConnector(platformId));
+      connector = new DemoConnector(platformId);
     }
+    cache.set(key, connector);
   }
-  return cache.get(platformId)!;
+  return cache.get(key)!;
 }

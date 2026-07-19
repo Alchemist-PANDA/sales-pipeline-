@@ -10,6 +10,7 @@ import { SIGNALS } from '../core/signals.js';
 import { AccountPool } from '../core/pool.js';
 import { EnrichmentEngine } from '../services/enrich.js';
 import { CredentialService } from '../services/credentials.js';
+import { CredentialValidator } from '../services/credentialValidator.js';
 import { hasScraperSupport } from '../scrapers/platforms/index.js';
 import { supportsSessionCapture } from '../scrapers/sessionCapture.js';
 
@@ -17,6 +18,7 @@ export const api = Router();
 const pool = new AccountPool(db);
 const engine = new EnrichmentEngine(db);
 const creds = new CredentialService(db);
+const validator = new CredentialValidator(db);
 
 const one = <T>(sql: string, ...p: any[]) => db.prepare(sql).get(...p) as T;
 const all = <T>(sql: string, ...p: any[]) => db.prepare(sql).all(...p) as T[];
@@ -145,6 +147,19 @@ api.post('/credentials/scraping/capture', async (req, res) => {
   if (!ownerId || !platformId || !email || !password)
     return res.status(400).json({ error: 'ownerId, platformId, email, password required' });
   res.json(await creds.captureSessionFor({ ownerId, platformId, email, password }));
+});
+
+// Cheap credential validation — free account/quota check, cached, no credits spent.
+api.post('/credentials/validate', async (req, res) => {
+  try {
+    if (req.body?.platformId) {
+      res.json({ results: [await validator.validatePlatform(String(req.body.platformId))] });
+    } else {
+      res.json(await validator.validateAll());
+    }
+  } catch (e: any) {
+    res.status(400).json({ error: e?.message ?? 'validation failed' });
+  }
 });
 
 // ── Leads ──────────────────────────────────────────────────────────────────

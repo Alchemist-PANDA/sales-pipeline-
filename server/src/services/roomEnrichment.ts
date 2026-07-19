@@ -22,6 +22,7 @@ import { getConnector } from '../connectors/index.js';
 import { WATERFALL_ORDER } from '../core/registry.js';
 import { BudgetGuard, ProviderBudget } from '../core/budget.js';
 import { verifyClaim, EvidenceItem, EvidenceTier } from '../core/verification.js';
+import { RunContext, RunStats } from '../core/runContext.js';
 
 /** Default per-provider budgets for the enrichment waterfall. Conservative —
  *  protects paid/limited-credit providers from runaway spend on a single run. */
@@ -69,6 +70,7 @@ export interface EnrichmentSummary {
   opportunities: number;
   skipped: { id: number; reason: string }[];
   budgetSnapshot: Record<string, unknown>;
+  runStats?: RunStats;
 }
 
 export class RoomEnrichmentService {
@@ -81,7 +83,7 @@ export class RoomEnrichmentService {
   }
 
   /** Enrich every signal currently selected_for_enrichment. */
-  async enrichSelected(actor = 'admin', limit = 50): Promise<EnrichmentSummary> {
+  async enrichSelected(ctx: RunContext, actor = 'admin', limit = 50): Promise<EnrichmentSummary> {
     const signals = this.db.prepare(
       `SELECT * FROM signal_events WHERE status='selected_for_enrichment' ORDER BY relevance DESC, id ASC LIMIT ?`,
     ).all(limit) as any[];
@@ -94,7 +96,7 @@ export class RoomEnrichmentService {
     for (const signal of signals) {
       summary.processed++;
       try {
-        const result = await this.enrichOne(signal, actor);
+        const result = await this.enrichOne(signal, actor, ctx);
         summary.enriched++;
         summary.companies += result.companyCreated ? 1 : 0;
         summary.people += result.peopleCreated;
@@ -104,10 +106,11 @@ export class RoomEnrichmentService {
       }
     }
     summary.budgetSnapshot = this.budget.snapshot();
+    summary.runStats = ctx.summary();
     return summary;
   }
 
-  private async enrichOne(signal: any, actor: string) {
+  private async enrichOne(signal: any, actor: string, ctx: RunContext) {
     const companyName = (signal.company_name_raw || signal.title || 'Unknown Company').trim();
     // Derive the company domain from the company itself — never from the signal's
     // SOURCE domain (e.g. linkedin.com), which would collapse distinct companies.
@@ -137,9 +140,13 @@ export class RoomEnrichmentService {
     for (const p of WATERFALL_ORDER) {
       const decision = this.budget.canCall(p.id);
       if (!decision.allowed) continue;
+      // In LIVE mode every provider hit is a real, billable call — reserve it
+      // against the global run ceiling first; when exhausted, stop the waterfall.
+      const estCost = (p.costWeight ?? 1) * 0.01;
+      if (ctx.isLive && !ctx.charge(p.id, estCost)) break;
 
       const lease = this.pool.lease(p.id);
-      const connector = getConnector(p.id);
+      const connector = getConnector(p.id, ctx.mode);
       const started = Date.now();
       let ok = false;
       let rateLimited = false;
@@ -169,6 +176,7 @@ export class RoomEnrichmentService {
       }
 
       this.budget.record(p.id, { ok, rateLimited });
+      if (ctx.isLive) ctx.recordResult(p.id, ok); else ctx.recordSynthesized();
       this.db.prepare(
         `INSERT INTO provider_usage (provider_id, operation, ok, calls, latency_ms, error_class)
          VALUES (?,?,?,?,?,?)`,
