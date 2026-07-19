@@ -11,6 +11,7 @@ import { migrate } from './db/index.js';
 import { api } from './routes/api.js';
 import { roomsApi } from './routes/rooms.js';
 import { crawlApi } from './routes/crawl.js';
+import { strategiesApi } from './routes/strategies.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 4000);
@@ -23,6 +24,7 @@ app.use(express.json({ limit: '2mb' }));
 app.get('/health', (_req, res) => res.json({ ok: true, service: 'signal-forge' }));
 app.use('/api/rooms', roomsApi);
 app.use('/api/crawl', crawlApi);
+app.use('/api/strategies', strategiesApi);
 app.use('/api', api);
 
 // Serve built dashboard if present (production single-artifact deploy).

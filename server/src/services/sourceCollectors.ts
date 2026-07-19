@@ -100,6 +100,8 @@ export class SignalCollectorService {
 
   async run(room: RoomMode, sourceId: string, strategy: CollectorStrategy, config: SourceRunConfig = {}) {
     switch (sourceId) {
+      case 'signal_discovery':
+        return this.collectSignalDiscovery(strategy, config);
       case 'google_search':
         return this.collectGoogleReferrals(strategy, config);
       case 'clutch_basic':
@@ -198,6 +200,24 @@ export class SignalCollectorService {
       metadata: item.metadata,
     })).filter((x) => x.rawText && x.url);
     return { received: items.length, valid: signals.length, inserted: this.persist(room, strategy, signals) };
+  }
+
+  /**
+   * Room 1 — open-world Signal Discovery. Strategy-driven web research through
+   * the production crawl engine (cache/retry/anti-bot/metrics all apply). Builds
+   * signal-oriented queries from the strategy and returns lead-convertible
+   * candidates, each carrying its source link for human credibility review.
+   */
+  private async collectSignalDiscovery(strategy: CollectorStrategy, config: SourceRunConfig) {
+    const queries = config.queries?.length ? config.queries : buildSignalQueries({
+      product: strategy.product,
+      pains: strategy.pains,
+      signals: strategy.signals,
+      industries: strategy.industries,
+      country: strategy.country,
+    });
+    const signals = await this.googleQueries('signal_discovery', queries, strategy, config.maxResults ?? 10);
+    return signals.map((s) => ({ ...s, rationale: s.rationale ?? 'Discovered via strategy-targeted public web research; may indicate a lead-convertible business event.' }));
   }
 
   private async collectGoogleReferrals(strategy: CollectorStrategy, config: SourceRunConfig) {

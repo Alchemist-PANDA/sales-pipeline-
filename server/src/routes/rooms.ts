@@ -11,11 +11,17 @@ import {
 } from '../core/rooms.js';
 import { RoomControlService } from '../services/roomControl.js';
 import { SignalCollectorService } from '../services/sourceCollectors.js';
+import { RoomEnrichmentService } from '../services/roomEnrichment.js';
 
 export const roomsApi = Router();
 const rooms = new RoomControlService(db);
 const collectors = new SignalCollectorService(db);
+const enrichment = new RoomEnrichmentService(db);
 const roomIds = new Set<RoomMode>(Object.keys(ROOM_LABELS) as RoomMode[]);
+
+function safeJson<T>(raw: unknown, fallback: T): T {
+  try { return JSON.parse(String(raw ?? '')) as T; } catch { return fallback; }
+}
 
 function roomOrThrow(value: unknown): RoomMode {
   if (typeof value !== 'string' || !roomIds.has(value as RoomMode)) throw new Error('Invalid room.');
@@ -163,6 +169,60 @@ roomsApi.post('/signals/select', (req, res) => handle(res, () => {
   return { ok: true, selected: info.changes };
 }));
 
+/**
+ * Selection-room inbox — signals awaiting review/selection across every origin
+ * room. Room 2 works this queue; status filter defaults to the actionable set.
+ */
+roomsApi.get('/signals/inbox', (req, res) => handle(res, () => {
+  rooms.assertActive('selection_enrichment_room');
+  const statuses = typeof req.query.status === 'string' && req.query.status
+    ? [String(req.query.status)]
+    : ['candidate', 'reviewed', 'selected_for_enrichment'];
+  const marks = statuses.map(() => '?').join(',');
+  const rows = db.prepare(
+    `SELECT * FROM signal_events WHERE status IN (${marks}) ORDER BY relevance DESC, first_seen_at DESC LIMIT 500`,
+  ).all(...statuses) as any[];
+  return {
+    counts: db.prepare(`SELECT status, COUNT(*) n FROM signal_events GROUP BY status`).all(),
+    signals: rows.map((row) => ({
+      ...row,
+      source_links: safeJson(row.source_links_json, []),
+      signal_hypotheses: safeJson(row.signal_hypotheses_json, []),
+    })),
+  };
+}));
+
+/** Run enrichment on all selected signals → companies, people, opportunities. */
+roomsApi.post('/signals/enrich', (req, res) => handle(res, async () => {
+  rooms.assertActive('selection_enrichment_room');
+  return { ok: true, ...(await enrichment.enrichSelected(req.body?.actor || 'admin', Number(req.body?.limit ?? 50))) };
+}));
+
+/** Finished actionable leads (enriched opportunities), newest/highest-priority first. */
+roomsApi.get('/opportunities', (req, res) => handle(res, () => {
+  const min = Number(req.query.minScore ?? 0);
+  const rows = db.prepare(
+    `SELECT o.*, c.trading_name AS company_name, c.domain AS company_domain, c.industry, c.employee_count,
+            c.country AS company_country, c.verification_status AS company_verification,
+            s.title AS signal_title, s.source_url AS signal_url, s.source_id AS signal_platform, s.signal_code
+       FROM lead_opportunities o
+       JOIN companies c ON c.id = o.company_id
+       LEFT JOIN signal_events s ON s.id = o.signal_event_id
+      WHERE o.priority_score >= ?
+      ORDER BY o.priority_score DESC, o.updated_at DESC LIMIT 300`,
+  ).all(min) as any[];
+  const people = db.prepare(`SELECT * FROM people`).all() as any[];
+  const byCompany = new Map<number, any[]>();
+  for (const p of people) (byCompany.get(p.company_id) ?? byCompany.set(p.company_id, []).get(p.company_id))!.push(p);
+  return {
+    opportunities: rows.map((r) => ({
+      ...r,
+      people: byCompany.get(r.company_id) ?? [],
+      actionable_lead: safeJson(r.actionable_lead_json, null),
+    })),
+  };
+}));
+
 roomsApi.post('/signals/:id/review', (req, res) => handle(res, () => {
   const room = roomOrThrow(req.body?.room);
   rooms.assertActive(room);
@@ -181,9 +241,17 @@ roomsApi.post('/signals/:id/reject', (req, res) => handle(res, () => {
 roomsApi.post('/:room/run', (req, res) => handle(res, async () => {
   const room = roomOrThrow(req.params.room);
   rooms.assertActive(room);
-  const sourceCatalog = room === 'referrals_room' || room === 'community_monitoring_room' ? freeSourcesForRoom(room) : [];
+
+  // Collector rooms: Room 1 (open-world discovery) + Rooms 3/4 (free-source catalog).
+  const COLLECTOR_ROOMS: RoomMode[] = ['signal_room', 'referrals_room', 'community_monitoring_room'];
+  const isFreeSourceRoom = room === 'referrals_room' || room === 'community_monitoring_room';
+  const sourceCatalog = isFreeSourceRoom
+    ? freeSourcesForRoom(room).map((s) => ({ id: s.id, name: s.name }))
+    : room === 'signal_room'
+      ? [{ id: 'signal_discovery', name: 'Strategy-driven web discovery' }]
+      : [];
   const strategyId = String(req.body?.strategyId || '').trim();
-  if ((room === 'referrals_room' || room === 'community_monitoring_room') && !strategyId) throw new Error('strategyId is required.');
+  if (COLLECTOR_ROOMS.includes(room) && !strategyId) throw new Error('strategyId is required.');
 
   const requested = Array.isArray(req.body?.sourceIds) && req.body.sourceIds.length
     ? req.body.sourceIds.map(String)
@@ -192,9 +260,10 @@ roomsApi.post('/:room/run', (req, res) => handle(res, async () => {
   const run = db.prepare(`INSERT INTO room_runs (room,status,triggered_by,summary_json) VALUES (?,?,?,?)`)
     .run(room, 'running', req.body?.actor || 'admin', JSON.stringify({ strategyId, sources: selected.map((s) => s.id) }));
 
-  if (room !== 'referrals_room' && room !== 'community_monitoring_room') {
+  if (!COLLECTOR_ROOMS.includes(room)) {
     db.prepare(`UPDATE room_runs SET status='completed',completed_at=datetime('now') WHERE id=?`).run(run.lastInsertRowid);
-    return { ok: true, runId: run.lastInsertRowid, room, processed: 0, inserted: 0 };
+    return { ok: true, runId: run.lastInsertRowid, room, processed: 0, inserted: 0,
+      message: 'This room does not run collectors. Room 2 enriches selected signals; Room 5 accepts manual intake.' };
   }
 
   const strategy = collectors.loadStrategy(strategyId);
